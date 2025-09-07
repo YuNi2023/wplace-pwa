@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <title>Wplace管理アプリ</title>
-  <link rel="manifest" href="/manifest.json">
+  <!-- 先頭スラッシュをやめて相対パスに -->
+  <link rel="manifest" href="./manifest.json">
 </head>
 <body>
   <h1>Wplace 管理アプリ</h1>
@@ -18,20 +19,27 @@
     }
 
     async function subscribePush() {
-      // サービスワーカー登録
-      const reg = await navigator.serviceWorker.register('/sw.js');
+      // ① Service Worker を相対パスで登録（スコープも相対に）
+      const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
 
-      // サーバーから公開鍵を取得
+      // ② iOSは明示の許可ダイアログが出やすいようにリクエストを先に
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        alert('通知が許可されませんでした（iOSの設定 > 通知 から許可できます）');
+        return;
+      }
+
+      // ③ 公開鍵を取得（あなたのWorkersのURLに差し替え）
       const vapidKey = await fetch('https://<your-workers-subdomain>/vapid-public-key')
         .then(r => r.text());
 
-      // Push購読を要求
+      // ④ Push購読
       const subscription = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: await urlBase64ToUint8Array(vapidKey)
       });
 
-      // サーバーに購読情報を送信
+      // ⑤ サーバへ購読情報を送信
       await fetch('https://<your-workers-subdomain>/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
