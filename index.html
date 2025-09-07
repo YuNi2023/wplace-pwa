@@ -3,397 +3,159 @@
 <head>
   <meta charset="UTF-8" />
   <title>Wplace管理アプリ</title>
-
-  <!-- iOS PWA -->
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
-
-  <!-- PWA manifest -->
-  <link rel="manifest" href="./manifest.json" />
-
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, sans-serif; padding: 16px; line-height: 1.6; }
-    h1 { margin: 0 0 12px; }
-    h2 { margin: 16px 0 8px; font-size: 18px; }
-    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #e5e7eb; background: #111827; color:#fff; cursor:pointer; }
-    button + button { margin-left: 8px; }
-    input { padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; }
-    label { display: inline-flex; align-items: center; gap: 6px; }
-    pre { background:#f9fafb; padding:12px; border-radius:8px; white-space:pre-wrap; }
-    .row { display:flex; gap:12px; flex-wrap:wrap; align-items: center; }
-    .card { border:1px solid #eee; padding:12px; border-radius:8px; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- GitHub Pages 直下に manifest.json を置いている想定 -->
+  <link rel="manifest" href="/manifest.json" />
 </head>
-  <!-- === Wplace ステータス表示 === -->
-<section style="margin-top:1.5rem;padding:1rem;border:1px solid #ddd;border-radius:12px">
-  <h2 style="margin:0 0 .5rem 0">Wplace ステータス</h2>
-  <div id="statusBox">
-    <div>Droplets: <span id="droplets">-</span></div>
-    <div>Paint: <span id="paint">-</span></div>
-    <div>Colors(bits): <span id="colors">-</span></div>
-  </div>
-  <div style="margin-top:.75rem;display:flex;gap:.5rem;flex-wrap:wrap">
-    <button id="btnFetch" type="button">最新情報を取得</button>
-    <button id="btnSaveCred" type="button">この端末の Cookie を保存</button>
-  </div>
-  <p id="statusMsg" style="color:#555;margin-top:.5rem"></p>
-</section>
-
-<script>
-  // ★ あなたの clientId と acctId を設定（固定でOK）
-  const CLIENT_ID = "01dcea86-1c4a-4d3c-9495-25559529efc0";
-  const ACCT_ID   = "mariko09229@gmail.com";
-  const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
-
-  async function fetchAndRender() {
-    const url = `${WORKERS_BASE}/api/test-fetch`;
-    const body = { clientId: CLIENT_ID, acctId: ACCT_ID };
-    setMsg("取得中…");
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const j = await res.json();
-      if (!res.ok || !j.ok) throw new Error(j.error || res.status);
-      const st = j.status || {};
-      document.getElementById("droplets").textContent = st.droplets ?? "-";
-      document.getElementById("paint").textContent    = st.paint ?? "-";
-      document.getElementById("colors").textContent   = Array.isArray(st.colors) ? st.colors.join(",") : "-";
-      setMsg("取得完了");
-    } catch (e) {
-      setMsg("取得エラー: " + e.message, true);
-    }
-  }
-
-  // DevTools > Application > Cookies で "Cookie" を丸ごとコピーした文字列を保存するユーティリティ（任意）
-  async function saveCredFromPrompt() {
-    const token = prompt("Cookie 全体（例: j=...; cf_clearance=...）を貼り付け:");
-    if (!token) return;
-    try {
-      const res = await fetch(`${WORKERS_BASE}/api/accounts/cred`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: CLIENT_ID, acctId: ACCT_ID, token })
-      });
-      const j = await res.json();
-      if (!res.ok || !j.ok) throw new Error(j.error || res.status);
-      setMsg("認証情報を保存しました。");
-    } catch (e) {
-      setMsg("保存エラー: " + e.message, true);
-    }
-  }
-
-  function setMsg(t, isErr=false) {
-    const p = document.getElementById("statusMsg");
-    p.textContent = t || "";
-    p.style.color = isErr ? "#c00" : "#555";
-  }
-
-  document.getElementById("btnFetch").addEventListener("click", fetchAndRender);
-  document.getElementById("btnSaveCred").addEventListener("click", saveCredFromPrompt);
-
-  // 初回自動取得
-  fetchAndRender();
-</script>
-
 <body>
   <h1>Wplace 管理アプリ</h1>
 
-  <div class="row" style="margin-bottom:8px;">
-    <button onclick="subscribePush()">通知を有効化</button>
-    <button onclick="resubscribe()">購読を再登録（修復）</button>
-    <button onclick="alert(getClientId())">この端末の clientId を表示</button>
-    <button onclick="dump()">状態ダンプ</button>
+  <!-- 表示モード確認 -->
+  <p id="mode"></p>
+
+  <!-- 通知操作 -->
+  <div style="margin:.75rem 0; display:flex; gap:.5rem; flex-wrap:wrap">
+    <button id="btnSub" type="button">通知を有効化 / 再登録</button>
+    <button id="btnUnsub" type="button">購読を解除</button>
   </div>
 
-  <pre id="log"></pre>
-
-  <!-- 端末ステータス -->
-  <div id="statusArea" style="margin-top:12px;"></div>
-
-  <!-- アカウント管理 -->
-  <div class="card" style="margin-top:16px;">
-    <h2>アカウント管理</h2>
-    <div class="row" style="margin-bottom:8px;">
-      <input id="acctId" placeholder="acctId（任意のID）" />
-      <input id="acctLabel" placeholder="表示名（例：メイン）" />
-      <label><input type="checkbox" id="acctNotify" checked /> 通知ON</label>
-      <button onclick="addAccount()">追加</button>
+  <!-- ステータス表示 -->
+  <section style="margin-top:1.5rem;padding:1rem;border:1px solid #ddd;border-radius:12px">
+    <h2 style="margin:0 0 .5rem 0">Wplace ステータス</h2>
+    <div id="statusBox">
+      <div>Droplets: <span id="droplets">-</span></div>
+      <div>Paint: <span id="paint">-</span></div>
+      <div>Colors: <span id="colors">-</span></div>
     </div>
-    <div id="acctList"></div>
-  </div>
+    <div style="margin-top:.75rem;display:flex;gap:.5rem;flex-wrap:wrap">
+      <button id="btnFetch" type="button">最新情報を取得</button>
+      <button id="btnSaveCred" type="button">この端末の Cookie を保存</button>
+    </div>
+    <p id="statusMsg" style="color:#555;margin-top:.5rem"></p>
+  </section>
 
-  <script>
-    // ===== 設定 =====
+  <!-- Service Worker / Push / API 読み込み: ES Modules + 従来スクリプト -->
+  <script type="module">
+    import { colorNamesFromIds } from "/src/colors.js"; // ★ ここで色名テーブルを読み込み
+
+    // ====== 設定（あなたの固有値に置き換え済み）======
     const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
-    // SW を確実に更新するため、デプロイのたびにバージョン文字列を変えてください
-    const SW_VERSION = "v13";
+    const CLIENT_ID    = "01dcea86-1c4a-4d3c-9495-25559529efc0";
+    const ACCT_ID      = "mariko09229@gmail.com";
 
-    // VAPID 公開鍵はサーバから自動取得（コピペミス防止）
-    let VAPID_PUBLIC = null;
+    // 表示モード
+    const mode = window.matchMedia("(display-mode: standalone)").matches ? "standalone" : "browser";
+    document.getElementById("mode").textContent = `[display-mode=${mode}]`;
 
-    // ===== ユーティリティ =====
-    const $ = (id) => document.getElementById(id);
-    const log = (msg, ok = true) => ($("log").textContent += (ok ? "✅ " : "❌ ") + msg + "\n");
-    const sep = () => ($("log").textContent += "------------------------------\n");
-
-    function urlBase64ToUint8Array(base64String) {
-      try {
-        const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-        const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-        const rawData = atob(base64); // ← 不正文字があるとここで InvalidCharacterError
-        return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
-      } catch (e) {
-        log("VAPID_PUBLIC（raw）= " + (base64String || "(empty)"), false);
-        throw e;
-      }
+    // ====== ユーティリティ ======
+    function setMsg(t, isErr=false) {
+      const p = document.getElementById("statusMsg");
+      p.textContent = t || "";
+      p.style.color = isErr ? "#c00" : "#555";
     }
 
-    async function fetchVapidPublic() {
-      if (VAPID_PUBLIC) return VAPID_PUBLIC;
-      const txt = await fetch(WORKERS_BASE + "/vapid-public-key", { cache: "no-store" }).then((r) => r.text());
-      VAPID_PUBLIC = (txt || "").trim();
-      // Base64URL のみ許可（A-Z a-z 0-9 _ -）
-      if (!/^[A-Za-z0-9_-]+$/.test(VAPID_PUBLIC)) {
-        throw new Error("VAPID 公開鍵に不正な文字が含まれています（Base64URL ではありません）");
-      }
-      return VAPID_PUBLIC;
-    }
-
-    async function validateVapidPublic() {
-      const pub = await fetchVapidPublic();
-      const key = urlBase64ToUint8Array(pub);
-      if (key.byteLength !== 65) {
-        throw new Error(`applicationServerKey length ${key.byteLength} (expected 65)`);
-      }
-      log("VAPID_PUBLIC 検証: OK (65 bytes)");
-      return key;
-    }
-
-    function getClientId() {
-      let id = localStorage.getItem("clientId");
-      if (!id) {
-        id = crypto.randomUUID();
-        localStorage.setItem("clientId", id);
-      }
-      return id;
+    async function urlBase64ToUint8Array(base64String) {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const rawData = atob(base64);
+      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
     }
 
     async function ensureSW() {
-      if (!("serviceWorker" in navigator)) throw new Error("Service Worker 未対応");
-      const reg = await navigator.serviceWorker.register(`./sw.js?${SW_VERSION}`, { scope: "./" });
-      const sw = reg.installing || reg.waiting || reg.active;
-      log(`SW state: ${sw?.state || "unknown"}`);
-      if (sw && sw.state !== "activated") {
-        await new Promise((res) => {
-          const onState = () => (sw.state === "activated" ? (sw.removeEventListener("statechange", onState), res()) : null);
-          sw.addEventListener("statechange", onState);
-        });
-        log("SW activated");
-      }
-      await navigator.serviceWorker.ready;
+      if (!("serviceWorker" in navigator)) throw new Error("ServiceWorker unsupported");
+      const reg = await navigator.serviceWorker.register("/sw.js");
       return reg;
     }
 
-    async function ensurePermission() {
-      const modeStandalone = window.matchMedia("(display-mode: standalone)").matches;
-      log("display-mode: " + (modeStandalone ? "standalone" : "browser"), modeStandalone);
-      if (!modeStandalone) throw new Error("ホーム画面アイコンから起動してください");
-      const before = Notification.permission;
-      log("通知権限（前）: " + before, before !== "denied");
-      const perm = await Notification.requestPermission();
-      log("通知権限（後）: " + perm, perm === "granted");
-      if (perm !== "granted") throw new Error("通知が許可されていません（設定 > 通知 で許可）");
-    }
-
-    // ===== 購読フロー =====
+    // ====== Push 購読 ======
     async function subscribePush() {
-      $("log").textContent = "";
       try {
-        await ensurePermission();
         const reg = await ensureSW();
-        const appKey = await validateVapidPublic();
-
-        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
-        log("Subscribed endpoint: " + sub.endpoint);
-
-        const clientId = getClientId();
-        log("clientId: " + clientId);
-
-        const res = await fetch(WORKERS_BASE + "/push/subscribe", {
+        // VAPID Public Key をサーバから取得（自動）
+        const vapidKey = await fetch(`${WORKERS_BASE}/vapid-public-key`).then(r => r.text());
+        if (!vapidKey) throw new Error("VAPID 公開鍵が取得できませんでした");
+        // 購読
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: await urlBase64ToUint8Array(vapidKey)
+        });
+        // サーバ登録
+        const res = await fetch(`${WORKERS_BASE}/push/subscribe`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId, subscription: sub }),
-          mode: "cors",
+          body: JSON.stringify({ clientId: CLIENT_ID, subscription: sub })
         });
-        const text = await res.text().catch(() => "");
-        log("Server status: " + res.status, res.ok);
-        log("Server body  : " + text, res.ok);
-        if (!res.ok) throw new Error("サーバ保存失敗 status=" + res.status + " " + text);
-
-        sep();
-        log("🎉 通知登録・保存 完了");
+        const j = await res.json();
+        if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+        alert("通知を登録しました！（購読）");
       } catch (e) {
-        log(`ERROR ${e?.name || ""}: ${e?.message || e}`, false);
+        alert("購読エラー: " + e.message + "\n（iOSの設定>通知 を確認）");
       }
     }
 
-    async function resubscribe() {
-      $("log").textContent = "";
+    // 購読解除
+    async function unsubscribePush() {
       try {
-        await ensurePermission();
         const reg = await ensureSW();
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) await sub.unsubscribe();
+        alert("購読を解除しました。");
+      } catch (e) {
+        alert("解除エラー: " + e.message);
+      }
+    }
 
-        const old = await reg.pushManager.getSubscription();
-        if (old) {
-          await old.unsubscribe();
-          log("旧購読を unsubscribe() 済み");
-          // 反映待ち（iOS/Safariは非同期反映されることがある）
-          for (let i = 0; i < 10; i++) {
-            const cur = await reg.pushManager.getSubscription();
-            if (!cur) { log("旧購読 = null 確認 OK"); break; }
-            await new Promise((r) => setTimeout(r, 200));
-          }
-        }
-
-        const appKey = await validateVapidPublic();
-        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
-        log("Subscribed endpoint: " + sub.endpoint);
-
-        const clientId = getClientId();
-        log("clientId: " + clientId);
-
-        const res = await fetch(WORKERS_BASE + "/push/subscribe", {
+    // ====== ステータス取得 & 表示 ======
+    async function fetchAndRender() {
+      const url = `${WORKERS_BASE}/api/test-fetch`;
+      const body = { clientId: CLIENT_ID, acctId: ACCT_ID };
+      setMsg("取得中…");
+      try {
+        const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId, subscription: sub }),
-          mode: "cors",
+          body: JSON.stringify(body),
         });
-        const text = await res.text().catch(() => "");
-        log("Server status: " + res.status, res.ok);
-        log("Server body  : " + text, res.ok);
-        if (!res.ok) throw new Error("サーバ保存失敗 status=" + res.status + " " + text);
-
-        sep();
-        log("🎉 再登録 完了（旧購読を解除→新規保存）");
-        loadStatus();
+        const j = await res.json();
+        if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+        const st = j.status || {};
+        document.getElementById("droplets").textContent = st.droplets ?? "-";
+        document.getElementById("paint").textContent    = st.paint ?? "-";
+        // ★ 色ID配列 → 名前配列へ変換して表示
+        document.getElementById("colors").textContent =
+          Array.isArray(st.colors) ? colorNamesFromIds(st.colors).join(", ") : "-";
+        setMsg("取得完了");
       } catch (e) {
-        log(`ERROR ${e?.name || ""}: ${e?.message || e}`, false);
+        setMsg("取得エラー: " + e.message, true);
       }
     }
 
-    async function dump() {
-      $("log").textContent = "";
+    // DevTools > Application > Cookies で "Cookie" を丸ごとコピーした文字列を保存するユーティリティ（任意）
+    async function saveCredFromPrompt() {
+      const token = prompt("Cookie 全体（例: j=...; cf_clearance=...）を貼り付け:");
+      if (!token) return;
       try {
-        log("display-mode=" + (window.matchMedia("(display-mode: standalone)").matches ? "standalone" : "browser"));
-        log("Notification.permission=" + Notification.permission);
-        const reg = await navigator.serviceWorker.getRegistration("./");
-        if (!reg) { log("SW: 未登録", false); return; }
-        const sw = reg.installing || reg.waiting || reg.active;
-        log("SW state: " + (sw?.state || "unknown"));
-        const cur = await reg.pushManager.getSubscription();
-        if (cur) log("Current endpoint: " + cur.endpoint);
-        else log("Current endpoint: (none)");
-        const resp = await fetch(WORKERS_BASE + "/debug/subs?ts=" + Date.now()).then((r) => r.json()).catch(() => null);
-        if (resp) log("Server subs count: " + resp.count);
-        // VAPID公開鍵の現在値も確認
-        const pub = await fetchVapidPublic().catch(() => null);
-        log("VAPID_PUBLIC (len)=" + (pub ? pub.length : 0), !!pub);
+        const res = await fetch(`${WORKERS_BASE}/api/accounts/cred`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId: CLIENT_ID, acctId: ACCT_ID, token })
+        });
+        const j = await res.json();
+        if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+        setMsg("認証情報を保存しました。");
       } catch (e) {
-        log("dump error: " + (e?.message || e), false);
+        setMsg("保存エラー: " + e.message, true);
       }
     }
 
-    // ===== 状態表示（モックAPI）=====
-    async function fetchStatus() {
-      const clientId = getClientId();
-      const res = await fetch(`${WORKERS_BASE}/api/status?clientId=${encodeURIComponent(clientId)}`);
-      if (!res.ok) throw new Error("status fetch failed");
-      return await res.json();
-    }
-    function renderStatus(s) {
-      const el = document.getElementById("statusArea");
-      el.innerHTML = `
-        <h2>この端末の状態</h2>
-        <div class="card">
-          <div>Droplet: <b>${s.droplets}</b></div>
-          <div>Paint: <b>${s.paint}</b></div>
-          <div>解放色: ${s.colors?.length ? s.colors.join(", ") : "(なし)"}</div>
-        </div>
-      `;
-    }
-    async function loadStatus() {
-      try {
-        const s = await fetchStatus();
-        renderStatus(s);
-      } catch {
-        document.getElementById("statusArea").innerHTML = '<p style="color:#dc2626">状態取得に失敗しました</p>';
-      }
-    }
+    // イベント紐付け
+    document.getElementById("btnSub").addEventListener("click", subscribePush);
+    document.getElementById("btnUnsub").addEventListener("click", unsubscribePush);
+    document.getElementById("btnFetch").addEventListener("click", fetchAndRender);
+    document.getElementById("btnSaveCred").addEventListener("click", saveCredFromPrompt);
 
-    // ===== アカウント管理 =====
-    async function listAccounts() {
-      const clientId = getClientId();
-      const r = await fetch(`${WORKERS_BASE}/api/accounts?clientId=${encodeURIComponent(clientId)}`);
-      const j = await r.json();
-      const list = j.items || [];
-      const el = document.getElementById("acctList");
-      el.innerHTML =
-        list
-          .map(
-            (a) => `
-        <div class="card" style="margin-bottom:8px;">
-          <div><b>${a.label}</b> <small>(${a.acctId})</small></div>
-          <div>通知: <b>${a.notify ? "ON" : "OFF"}</b></div>
-          <div style="margin-top:6px;">
-            <button onclick="toggleNotify('${a.acctId}', ${!a.notify})">通知を${a.notify ? "OFF" : "ON"}に</button>
-            <button onclick="removeAccount('${a.acctId}')">削除</button>
-          </div>
-        </div>`
-          )
-          .join("") || "<p>(未登録)</p>";
-    }
-    async function addAccount() {
-      const clientId = getClientId();
-      const acctId = document.getElementById("acctId").value.trim();
-      const label = document.getElementById("acctLabel").value.trim();
-      const notify = document.getElementById("acctNotify").checked;
-      if (!acctId) return alert("acctId を入力してください");
-      await fetch(`${WORKERS_BASE}/api/accounts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, acctId, label, notify }),
-      }).then((r) => (r.ok ? r : r.text().then((t) => Promise.reject(t))));
-      document.getElementById("acctId").value = "";
-      document.getElementById("acctLabel").value = "";
-      await listAccounts();
-    }
-    async function toggleNotify(acctId, next) {
-      const clientId = getClientId();
-      await fetch(`${WORKERS_BASE}/api/accounts`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, acctId, notify: next }),
-      });
-      await listAccounts();
-    }
-    async function removeAccount(acctId) {
-      const clientId = getClientId();
-      await fetch(`${WORKERS_BASE}/api/accounts`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, acctId }),
-      });
-      await listAccounts();
-    }
-
-    // 起動時に読み込み
-    loadStatus();
-    listAccounts();
+    // 初回自動取得
+    fetchAndRender();
   </script>
 </body>
 </html>
