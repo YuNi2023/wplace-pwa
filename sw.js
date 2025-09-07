@@ -1,9 +1,7 @@
 // sw.js — Pull方式：空Push受信→サーバから本文取得→通知表示
 
-// あなたの Workers のベースURL
 const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
 
-// install/activate（お好みで）
 self.addEventListener("install", (e) => {
   self.skipWaiting();
 });
