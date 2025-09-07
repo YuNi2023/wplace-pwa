@@ -26,6 +26,80 @@
     .card { border:1px solid #eee; padding:12px; border-radius:8px; }
   </style>
 </head>
+  <!-- === Wplace ステータス表示 === -->
+<section style="margin-top:1.5rem;padding:1rem;border:1px solid #ddd;border-radius:12px">
+  <h2 style="margin:0 0 .5rem 0">Wplace ステータス</h2>
+  <div id="statusBox">
+    <div>Droplets: <span id="droplets">-</span></div>
+    <div>Paint: <span id="paint">-</span></div>
+    <div>Colors(bits): <span id="colors">-</span></div>
+  </div>
+  <div style="margin-top:.75rem;display:flex;gap:.5rem;flex-wrap:wrap">
+    <button id="btnFetch" type="button">最新情報を取得</button>
+    <button id="btnSaveCred" type="button">この端末の Cookie を保存</button>
+  </div>
+  <p id="statusMsg" style="color:#555;margin-top:.5rem"></p>
+</section>
+
+<script>
+  // ★ あなたの clientId と acctId を設定（固定でOK）
+  const CLIENT_ID = "01dcea86-1c4a-4d3c-9495-25559529efc0";
+  const ACCT_ID   = "mariko09229@gmail.com";
+  const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
+
+  async function fetchAndRender() {
+    const url = `${WORKERS_BASE}/api/test-fetch`;
+    const body = { clientId: CLIENT_ID, acctId: ACCT_ID };
+    setMsg("取得中…");
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+      const st = j.status || {};
+      document.getElementById("droplets").textContent = st.droplets ?? "-";
+      document.getElementById("paint").textContent    = st.paint ?? "-";
+      document.getElementById("colors").textContent   = Array.isArray(st.colors) ? st.colors.join(",") : "-";
+      setMsg("取得完了");
+    } catch (e) {
+      setMsg("取得エラー: " + e.message, true);
+    }
+  }
+
+  // DevTools > Application > Cookies で "Cookie" を丸ごとコピーした文字列を保存するユーティリティ（任意）
+  async function saveCredFromPrompt() {
+    const token = prompt("Cookie 全体（例: j=...; cf_clearance=...）を貼り付け:");
+    if (!token) return;
+    try {
+      const res = await fetch(`${WORKERS_BASE}/api/accounts/cred`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: CLIENT_ID, acctId: ACCT_ID, token })
+      });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+      setMsg("認証情報を保存しました。");
+    } catch (e) {
+      setMsg("保存エラー: " + e.message, true);
+    }
+  }
+
+  function setMsg(t, isErr=false) {
+    const p = document.getElementById("statusMsg");
+    p.textContent = t || "";
+    p.style.color = isErr ? "#c00" : "#555";
+  }
+
+  document.getElementById("btnFetch").addEventListener("click", fetchAndRender);
+  document.getElementById("btnSaveCred").addEventListener("click", saveCredFromPrompt);
+
+  // 初回自動取得
+  fetchAndRender();
+</script>
+
 <body>
   <h1>Wplace 管理アプリ</h1>
 
