@@ -29,7 +29,70 @@
     <button onclick="alert(getClientId())">この端末の clientId を表示</button>
     <button onclick="dump()">状態ダンプ</button>
   </div>
+<div class="card" style="margin-top:16px;">
+  <h2>アカウント管理</h2>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+    <input id="acctId" placeholder="acctId（任意のID）">
+    <input id="acctLabel" placeholder="表示名（例：メイン）">
+    <label><input type="checkbox" id="acctNotify" checked> 通知ON</label>
+    <button onclick="addAccount()">追加</button>
+  </div>
+  <div id="acctList"></div>
+</div>
 
+<script>
+  async function listAccounts() {
+    const clientId = getClientId();
+    const r = await fetch(`${WORKERS_BASE}/api/accounts?clientId=${encodeURIComponent(clientId)}`);
+    const j = await r.json();
+    const list = j.items || [];
+    const el = document.getElementById('acctList');
+    el.innerHTML = list.map(a => `
+      <div class="card" style="margin-bottom:8px;">
+        <div><b>${a.label}</b> <small>(${a.acctId})</small></div>
+        <div>通知: <b>${a.notify ? 'ON' : 'OFF'}</b></div>
+        <div style="margin-top:6px;">
+          <button onclick="toggleNotify('${a.acctId}', ${!a.notify})">通知を${a.notify?'OFF':'ON'}に</button>
+          <button onclick="removeAccount('${a.acctId}')">削除</button>
+        </div>
+      </div>
+    `).join('') || '<p>(未登録)</p>';
+  }
+  async function addAccount() {
+    const clientId = getClientId();
+    const acctId = document.getElementById('acctId').value.trim();
+    const label = document.getElementById('acctLabel').value.trim();
+    const notify = document.getElementById('acctNotify').checked;
+    if (!acctId) return alert('acctId を入力してください');
+    await fetch(`${WORKERS_BASE}/api/accounts`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ clientId, acctId, label, notify })
+    }).then(r => r.ok ? r : r.text().then(t=>Promise.reject(t)));
+    document.getElementById('acctId').value = '';
+    document.getElementById('acctLabel').value = '';
+    await listAccounts();
+  }
+  async function toggleNotify(acctId, next) {
+    const clientId = getClientId();
+    await fetch(`${WORKERS_BASE}/api/accounts`, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ clientId, acctId, notify: next })
+    });
+    await listAccounts();
+  }
+  async function removeAccount(acctId) {
+    const clientId = getClientId();
+    await fetch(`${WORKERS_BASE}/api/accounts`, {
+      method: 'DELETE', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ clientId, acctId })
+    });
+    await listAccounts();
+  }
+
+  // 起動時に一覧を表示
+  listAccounts();
+</script>
+  
   <pre id="log"></pre>
 
   <div id="statusArea" style="margin-top:12px;"></div>
