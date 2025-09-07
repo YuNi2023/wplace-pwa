@@ -3,7 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <title>Wplace管理アプリ</title>
-  <!-- 先頭スラッシュをやめて相対パスに -->
+  <!-- iOS PWA 用のおまじない -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+
+  <!-- PWA manifest -->
   <link rel="manifest" href="./manifest.json">
 </head>
 <body>
@@ -11,6 +16,7 @@
   <button onclick="subscribePush()">通知を有効化</button>
 
   <script>
+    // VAPIDキーをBase64URL→Uint8Arrayに変換
     async function urlBase64ToUint8Array(base64String) {
       const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
       const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -18,35 +24,53 @@
       return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
     }
 
+    // デバッグ付きの購読登録フロー
     async function subscribePush() {
-      // ① Service Worker を相対パスで登録（スコープも相対に）
-      const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+      try {
+        alert('[1] display-mode=' + (window.matchMedia('(display-mode: standalone)').matches ? 'standalone' : 'browser'));
 
-      // ② iOSは明示の許可ダイアログが出やすいようにリクエストを先に
-      const perm = await Notification.requestPermission();
-      if (perm !== 'granted') {
-        alert('通知が許可されませんでした（iOSの設定 > 通知 から許可できます）');
-        return;
+        if (!('serviceWorker' in navigator)) {
+          alert('この端末は Service Worker 非対応です');
+          return;
+        }
+
+        // Service Worker 登録
+        const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+        await navigator.serviceWorker.ready;
+        alert('[2] SW登録OK');
+
+        // 通知許可をリクエスト
+        const perm = await Notification.requestPermission();
+        alert('[3] 通知許可=' + perm);
+        if (perm !== 'granted') {
+          alert('通知が許可されませんでした（iOSの設定 > 通知 から許可できます）');
+          return;
+        }
+
+        // VAPID 公開鍵取得（あなたの Cloudflare Workers URL に差し替え）
+        const vapidKey = await fetch('https://<your-workers-subdomain>/vapid-public-key', { mode: 'cors' }).then(r => r.text());
+        alert('[4] vapidKey len=' + vapidKey.length);
+
+        // Push 購読
+        const subscription = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidKey)
+        });
+        alert('[5] 購読OK endpoint=' + subscription.endpoint.slice(0, 32) + '...');
+
+        // サーバーに購読情報を送信
+        const res = await fetch('https://<your-workers-subdomain>/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(subscription),
+          mode: 'cors'
+        });
+        alert('[6] サーバ登録 status=' + res.status);
+
+        alert('通知を登録しました！');
+      } catch (e) {
+        alert('エラー: ' + (e && e.message ? e.message : String(e)));
       }
-
-      // ③ 公開鍵を取得（あなたのWorkersのURLに差し替え）
-      const vapidKey = await fetch('https://<your-workers-subdomain>/vapid-public-key')
-        .then(r => r.text());
-
-      // ④ Push購読
-      const subscription = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: await urlBase64ToUint8Array(vapidKey)
-      });
-
-      // ⑤ サーバへ購読情報を送信
-      await fetch('https://<your-workers-subdomain>/push/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(subscription)
-      });
-
-      alert('通知を登録しました！');
     }
   </script>
 </body>
