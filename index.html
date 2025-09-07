@@ -1,159 +1,103 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <title>Wplace管理アプリ（診断版）</title>
+  <meta charset="UTF-8">
+  <title>Wplace管理アプリ</title>
 
-  <!-- iOS PWA 用 -->
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <!-- iOS PWA 用設定 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
 
-  <link rel="manifest" href="./manifest.json" />
-  <style>
-    body { font-family: system-ui, -apple-system, sans-serif; padding: 16px; line-height: 1.6; }
-    code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; }
-    .ok { color: #059669; }
-    .ng { color: #dc2626; }
-    .log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f9fafb; padding: 12px; border-radius: 8px; }
-    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #e5e7eb; background: #111827; color: #fff; }
-    button + button { margin-left: 8px; }
-  </style>
+  <!-- PWA manifest -->
+  <link rel="manifest" href="./manifest.json">
 </head>
 <body>
-  <h1>Wplace 管理アプリ（診断版）</h1>
+  <h1>Wplace 管理アプリ</h1>
 
-  <p>下のボタンを押すと、<strong>起動モード / SW登録 / 通知許可 / 公開鍵 / Push購読 / サーバ保存</strong>の順にチェックします。</p>
-
-  <div style="margin: 8px 0;">
-    <button onclick="run()">診断して通知を有効化</button>
+  <div style="display:flex; gap:12px; flex-wrap:wrap">
+    <button onclick="subscribePush()">通知を有効化</button>
     <button onclick="resubscribe()">購読を再登録（修復）</button>
   </div>
 
-  <div id="status" class="log"></div>
-
   <script>
-    // ====== 設定（あなたの環境に合わせて） ======
+    // === 設定 ===
     const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
     const VAPID_PUBLIC = "BLyGULASL4RvoJt1SQks4ODP-e0RYLWVJZ-dH9cx-_X7wXAaRQwxsquuisagpqAEs4QEJOU5e1C-UbH_hOjAfMg";
-    // Service Worker のキャッシュ問題を避けるためバージョンを上げていく
-    const SW_VERSION = "v4"; // ← 詰まったら v5, v6 と上げる
-    // ===========================================
+    const SW_VERSION = "v8"; // ← キャッシュ更新用。更新時は v9, v10…と上げてください。
 
-    const $ = (id) => document.getElementById(id);
-    const log = (msg, ok = true) => {
-      const el = $("status");
-      el.innerHTML += (ok ? "✅ " : "❌ ") + msg + "\n";
-    };
-    const hr = () => { $("status").innerHTML += "-----------------------------\n"; };
-
+    // Base64URL → Uint8Array
     function urlBase64ToUint8Array(base64String) {
-      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
       const rawData = atob(base64);
-      return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
     }
 
-    async function ensureSW() {
-      if (!("serviceWorker" in navigator)) {
-        throw new Error("Service Worker 未対応");
+    // 端末ごとの一意IDを取得（初回は生成→localStorageに保存）
+    function getClientId() {
+      let id = localStorage.getItem('clientId');
+      if (!id) {
+        id = crypto.randomUUID();
+        localStorage.setItem('clientId', id);
       }
-      // バージョン付きで登録（キャッシュ無効化）
-      const reg = await navigator.serviceWorker.register(`./sw.js?${SW_VERSION}`, { scope: "./" });
+      return id;
+    }
+
+    // Service Worker を登録
+    async function ensureSW() {
+      if (!('serviceWorker' in navigator)) throw new Error('この端末はSW非対応です');
+      const reg = await navigator.serviceWorker.register(`./sw.js?${SW_VERSION}`, { scope: './' });
       await navigator.serviceWorker.ready;
       return reg;
     }
 
-    async function requestNotifyPermission() {
-      const before = Notification.permission; // default / granted / denied
-      log(`通知権限（前）: ${before}`, before !== "denied");
-      const perm = await Notification.requestPermission();
-      log(`通知権限（後）: ${perm}`, perm === "granted");
-      if (perm !== "granted") throw new Error("通知が許可されませんでした（設定 > 通知 で許可）");
-    }
-
-    async function subscribeOnce() {
-      const reg = await ensureSW();
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC),
-      });
-      return sub;
-    }
-
-    async function saveSubscription(sub) {
-      const res = await fetch(WORKERS_BASE + "/push/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sub),
-        mode: "cors",
-      });
-      if (!res.ok) {
-        const t = await res.text().catch(() => "");
-        throw new Error(`サーバ保存失敗 status=${res.status} ${t}`);
-      }
-      return true;
-    }
-
-    async function run() {
-      $("status").innerHTML = "";
-
+    // 通知購読
+    async function subscribePush() {
       try {
-        // 1) display-mode
-        const standalone = window.matchMedia("(display-mode: standalone)").matches;
-        log(`起動モード: ${standalone ? "standalone（OK）" : "browser（Safariから。ホーム画面アイコンで起動して）"}`, standalone);
-        if (!standalone) return; // ここで止める（まずはホーム画面から再起動）
-
-        // 2) manifest と sw 到達性の簡易チェック
-        const mani = await fetch("./manifest.json", { cache: "no-store" });
-        log(`manifest取得: ${mani.status}`, mani.ok);
-
-        const swHead = await fetch(`./sw.js?${SW_VERSION}`, { method: "HEAD", cache: "no-store" });
-        log(`sw.js到達: ${swHead.status}`, swHead.ok);
-
-        // 3) Service Worker 登録
         const reg = await ensureSW();
-        log("SW登録: OK", true);
 
-        // 4) 通知許可
-        await requestNotifyPermission();
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') {
+          alert('通知が許可されていません（設定 > 通知 で許可してください）');
+          return;
+        }
 
-        // 5) VAPID（直書き）チェック
-        log(`VAPID_PUBLIC 長さ: ${VAPID_PUBLIC.length}`, VAPID_PUBLIC.length > 0);
+        const subscription = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC)
+        });
 
-        // 6) Push購読
-        const sub = await subscribeOnce();
-        log(`購読OK: ${sub.endpoint.slice(0, 48)}...`, true);
+        const clientId = getClientId();
 
-        // 7) サーバ保存
-        await saveSubscription(sub);
-        log("サーバ保存: OK", true);
+        // Workers に購読を保存
+        const res = await fetch(WORKERS_BASE + '/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId, subscription }),
+          mode: 'cors'
+        });
 
-        hr();
-        log("🎉 すべてOK！ PCから /push/broadcast を叩いて通知を確認してください", true);
+        if (!res.ok) throw new Error('サーバ保存失敗 status=' + res.status);
+
+        alert('通知登録・保存 完了');
       } catch (e) {
-        log(String(e), false);
-        hr();
-        log("上の❌の行が原因です。必要なら resubscribe で修復を試してください。", false);
+        alert('エラー: ' + (e?.message || String(e)));
       }
     }
 
-    // 既存の購読を解除してから再登録（endpoint無効や鍵不一致の修復用）
+    // 再登録（古い購読を解除してから登録）
     async function resubscribe() {
-      $("status").innerHTML = "";
       try {
         const reg = await ensureSW();
         const old = await reg.pushManager.getSubscription();
         if (old) {
           await old.unsubscribe();
-          log("既存購読: 解除しました", true);
-        } else {
-          log("既存購読: 見つかりません（新規登録へ）", true);
+          alert('既存の購読を解除しました');
         }
-        // 再実行
-        await run();
+        await subscribePush();
       } catch (e) {
-        log("再登録エラー: " + (e?.message || String(e)), false);
+        alert('再登録エラー: ' + (e?.message || String(e)));
       }
     }
   </script>
