@@ -15,7 +15,10 @@
 <body>
   <h1>Wplace 管理アプリ</h1>
 
-  <button onclick="subscribePush()">通知を有効化</button>
+  <div style="display:flex; gap:12px; flex-wrap:wrap">
+    <button onclick="subscribePush()">通知を有効化</button>
+    <button onclick="resubscribe()">購読を再登録（修復）</button>
+  </div>
 
   <script>
     // === あなたのCloudflare WorkersのベースURL ===
@@ -23,11 +26,6 @@
 
     // あなたの VAPID 公開鍵（Base64URL形式）— 直書き版
     const VAPID_PUBLIC = "BLyGULASL4RvoJt1SQks4ODP-e0RYLWVJZ-dH9cx-_X7wXAaRQwxsquuisagpqAEs4QEJOU5e1C-UbH_hOjAfMg";
-
-    // 必要に応じて Workers から公開鍵を取得したい場合はこちらを使ってください：
-    // async function fetchVapidPublic() {
-    //   return fetch(WORKERS_BASE + "/vapid-public-key", { mode: "cors" }).then(r => r.text());
-    // }
 
     // Base64URL → Uint8Array
     function urlBase64ToUint8Array(base64String) {
@@ -37,47 +35,48 @@
       return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
     }
 
+    async function ensureSW() {
+      if (!('serviceWorker' in navigator)) {
+        alert('この端末は Service Worker 非対応です');
+        throw new Error('SW unsupported');
+      }
+      const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+      await navigator.serviceWorker.ready;
+      return reg;
+    }
+
+    async function requestNotifyPermission() {
+      const perm = await Notification.requestPermission();
+      alert('[3] 通知許可=' + perm);
+      if (perm !== 'granted') {
+        throw new Error('通知が許可されませんでした（iOSの設定 > 通知 から許可できます）');
+      }
+    }
+
     async function subscribePush() {
       try {
         alert('[1] display-mode=' +
           (window.matchMedia('(display-mode: standalone)').matches ? 'standalone' : 'browser'));
 
-        if (!('serviceWorker' in navigator)) {
-          alert('この端末は Service Worker 非対応です');
-          return;
-        }
-
-        // Service Worker 登録（相対パス & 相対スコープ）
-        const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
-        await navigator.serviceWorker.ready;
+        const reg = await ensureSW();
         alert('[2] SW登録OK');
 
-        // 通知許可ダイアログ
-        const perm = await Notification.requestPermission();
-        alert('[3] 通知許可=' + perm);
-        if (perm !== 'granted') {
-          alert('通知が許可されませんでした（iOSの設定 > 通知 から許可できます）');
-          return;
-        }
-
-        // 公開鍵：直書きを使用（Workersから取得したい場合は fetchVapidPublic() を使って置き換えてOK）
-        const applicationServerKey = urlBase64ToUint8Array(VAPID_PUBLIC);
+        await requestNotifyPermission();
 
         // Push 購読
         const subscription = await reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC)
         });
         alert('[4] 購読OK endpoint=' + subscription.endpoint.slice(0, 40) + '...');
 
-        // === ここが更新ポイント：Workersへ購読情報を保存 ===
+        // Workers に購読を保存
         const res = await fetch(WORKERS_BASE + '/push/subscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(subscription),
           mode: 'cors'
         });
-
         if (!res.ok) {
           const t = await res.text().catch(() => '');
           throw new Error('サーバ登録失敗 status=' + res.status + ' ' + t);
@@ -87,6 +86,24 @@
         console.log('Subscription saved:', await res.text().catch(() => 'OK'));
       } catch (e) {
         alert('エラー: ' + (e?.message || String(e)));
+      }
+    }
+
+    // 既存購読を解除してから再登録（endpoint無効化の修復用）
+    async function resubscribe() {
+      try {
+        const reg = await ensureSW();
+        const old = await reg.pushManager.getSubscription();
+        if (old) {
+          await old.unsubscribe();
+          alert('既存の購読を解除しました');
+        } else {
+          alert('現在の購読は存在しません（新規登録を行います）');
+        }
+        // 通常の登録フロー
+        await subscribePush();
+      } catch (e) {
+        alert('再登録エラー: ' + (e?.message || String(e)));
       }
     }
   </script>
