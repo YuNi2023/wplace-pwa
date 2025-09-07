@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Wplace管理アプリ</title>
-  <!-- iOS PWA 用のおまじない -->
+  <!-- iOS PWA 用設定 -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
@@ -16,18 +16,21 @@
   <button onclick="subscribePush()">通知を有効化</button>
 
   <script>
-    // VAPIDキーをBase64URL→Uint8Arrayに変換
-    async function urlBase64ToUint8Array(base64String) {
+    // あなたの VAPID 公開鍵（Base64URL形式）
+    const VAPID_PUBLIC = "BLyGULASL4RvoJt1SQks4ODP-e0RYLWVJZ-dH9cx-_X7wXAaRQwxsquuisagpqAEs4QEJOU5e1C-UbH_hOjAfMg";
+
+    // VAPID 公開鍵を Uint8Array に変換
+    function urlBase64ToUint8Array(base64String) {
       const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
       const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
       const rawData = atob(base64);
       return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
     }
 
-    // デバッグ付きの購読登録フロー
     async function subscribePush() {
       try {
-        alert('[1] display-mode=' + (window.matchMedia('(display-mode: standalone)').matches ? 'standalone' : 'browser'));
+        alert('[1] display-mode=' +
+          (window.matchMedia('(display-mode: standalone)').matches ? 'standalone' : 'browser'));
 
         if (!('serviceWorker' in navigator)) {
           alert('この端末は Service Worker 非対応です');
@@ -47,29 +50,21 @@
           return;
         }
 
-        // VAPID 公開鍵取得（あなたの Cloudflare Workers URL に差し替え）
-        const vapidKey = await fetch('https://<your-workers-subdomain>/vapid-public-key', { mode: 'cors' }).then(r => r.text());
-        alert('[4] vapidKey len=' + vapidKey.length);
-
-        // Push 購読
+        // Push購読
         const subscription = await reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidKey)
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC)
         });
-        alert('[5] 購読OK endpoint=' + subscription.endpoint.slice(0, 32) + '...');
+        alert('[4] 購読OK endpoint=' +
+          subscription.endpoint.slice(0, 40) + '...');
 
-        // サーバーに購読情報を送信
-        const res = await fetch('https://<your-workers-subdomain>/push/subscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(subscription),
-          mode: 'cors'
-        });
-        alert('[6] サーバ登録 status=' + res.status);
+        // まだサーバーが無いので送信はスキップ
+        // あとで Cloudflare Workers などにPOSTする形にする
 
-        alert('通知を登録しました！');
+        alert('通知を登録しました！（購読のみ完了）');
+        console.log('Subscription:', JSON.stringify(subscription));
       } catch (e) {
-        alert('エラー: ' + (e && e.message ? e.message : String(e)));
+        alert('エラー: ' + (e?.message || String(e)));
       }
     }
   </script>
