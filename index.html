@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <title>Wplace管理アプリ</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- GitHub Pages 直下に manifest.json を置いている想定 -->
-  <link rel="manifest" href="/manifest.json" />
+  <!-- ★ 相対パスに変更 -->
+  <link rel="manifest" href="./manifest.json" />
 </head>
 <body>
   <h1>Wplace 管理アプリ</h1>
@@ -34,25 +34,31 @@
     <p id="statusMsg" style="color:#555;margin-top:.5rem"></p>
   </section>
 
-  <!-- Service Worker / Push / API 読み込み: ES Modules + 従来スクリプト -->
-  <script type="module">
-    import { colorNamesFromIds } from "/src/colors.js"; // ★ ここで色名テーブルを読み込み
+  <noscript>このアプリを使うには JavaScript を有効にしてください。</noscript>
 
-    // ====== 設定（あなたの固有値に置き換え済み）======
+  <!-- ★ 相対パスで ES Modules 読み込み -->
+  <script type="module">
+    // ===== 設定 =====
     const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
     const CLIENT_ID    = "01dcea86-1c4a-4d3c-9495-25559529efc0";
     const ACCT_ID      = "mariko09229@gmail.com";
 
-    // 表示モード
-    const mode = window.matchMedia("(display-mode: standalone)").matches ? "standalone" : "browser";
-    document.getElementById("mode").textContent = `[display-mode=${mode}]`;
+    // ★ ここが重要：相対パス "./src/colors.js"
+    import { colorNamesFromIds } from "./src/colors.js";
 
-    // ====== ユーティリティ ======
+    // ===== 便利関数 =====
+    const $ = (id) => document.getElementById(id);
     function setMsg(t, isErr=false) {
-      const p = document.getElementById("statusMsg");
+      const p = $("statusMsg");
       p.textContent = t || "";
       p.style.color = isErr ? "#c00" : "#555";
+      if (isErr) console.error(t);
+      else console.log(t);
     }
+
+    // 表示モード
+    const mode = window.matchMedia("(display-mode: standalone)").matches ? "standalone" : "browser";
+    $("mode").textContent = `[display-mode=${mode}]`;
 
     async function urlBase64ToUint8Array(base64String) {
       const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -61,53 +67,62 @@
       return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
     }
 
+    // ★ 相対パスで SW を登録（GitHub Pages ではこの index.html と同じディレクトリに sw.js を置く）
     async function ensureSW() {
       if (!("serviceWorker" in navigator)) throw new Error("ServiceWorker unsupported");
-      const reg = await navigator.serviceWorker.register("/sw.js");
+      console.log("SW: 登録開始");
+      const reg = await navigator.serviceWorker.register("./sw.js");
+      console.log("SW: 登録OK", reg);
       return reg;
     }
 
-    // ====== Push 購読 ======
+    // ===== Push購読 =====
     async function subscribePush() {
       try {
         const reg = await ensureSW();
-        // VAPID Public Key をサーバから取得（自動）
         const vapidKey = await fetch(`${WORKERS_BASE}/vapid-public-key`).then(r => r.text());
         if (!vapidKey) throw new Error("VAPID 公開鍵が取得できませんでした");
-        // 購読
+
         const sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: await urlBase64ToUint8Array(vapidKey)
         });
-        // サーバ登録
+        console.log("Push 購読 OK", sub?.endpoint);
+
         const res = await fetch(`${WORKERS_BASE}/push/subscribe`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ clientId: CLIENT_ID, subscription: sub })
         });
-        const j = await res.json();
-        if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+        const j = await res.json().catch(()=> ({}));
+        if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
         alert("通知を登録しました！（購読）");
       } catch (e) {
-        alert("購読エラー: " + e.message + "\n（iOSの設定>通知 を確認）");
+        alert("購読エラー: " + e.message + "\n（iOSの設定>通知 も確認）");
+        console.error(e);
       }
     }
 
-    // 購読解除
     async function unsubscribePush() {
       try {
         const reg = await ensureSW();
         const sub = await reg.pushManager.getSubscription();
-        if (sub) await sub.unsubscribe();
+        if (sub) {
+          await sub.unsubscribe();
+          console.log("Push 解除 OK");
+        } else {
+          console.log("Push 解除: 購読なし");
+        }
         alert("購読を解除しました。");
       } catch (e) {
         alert("解除エラー: " + e.message);
+        console.error(e);
       }
     }
 
-    // ====== ステータス取得 & 表示 ======
+    // ===== ステータス取得 & 表示 =====
     async function fetchAndRender() {
-      const url = `${WORKERS_BASE}/api/test-fetch`;
+      const url  = `${WORKERS_BASE}/api/test-fetch`;
       const body = { clientId: CLIENT_ID, acctId: ACCT_ID };
       setMsg("取得中…");
       try {
@@ -117,20 +132,20 @@
           body: JSON.stringify(body),
         });
         const j = await res.json();
-        if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+        if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
         const st = j.status || {};
-        document.getElementById("droplets").textContent = st.droplets ?? "-";
-        document.getElementById("paint").textContent    = st.paint ?? "-";
-        // ★ 色ID配列 → 名前配列へ変換して表示
-        document.getElementById("colors").textContent =
-          Array.isArray(st.colors) ? colorNamesFromIds(st.colors).join(", ") : "-";
+        $("droplets").textContent = st.droplets ?? "-";
+        $("paint").textContent    = st.paint ?? "-";
+        $("colors").textContent   = Array.isArray(st.colors)
+          ? colorNamesFromIds(st.colors).join(", ")
+          : "-";
         setMsg("取得完了");
       } catch (e) {
         setMsg("取得エラー: " + e.message, true);
       }
     }
 
-    // DevTools > Application > Cookies で "Cookie" を丸ごとコピーした文字列を保存するユーティリティ（任意）
+    // Cookie 保存（任意機能）
     async function saveCredFromPrompt() {
       const token = prompt("Cookie 全体（例: j=...; cf_clearance=...）を貼り付け:");
       if (!token) return;
@@ -140,19 +155,19 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ clientId: CLIENT_ID, acctId: ACCT_ID, token })
         });
-        const j = await res.json();
-        if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+        const j = await res.json().catch(()=> ({}));
+        if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
         setMsg("認証情報を保存しました。");
       } catch (e) {
         setMsg("保存エラー: " + e.message, true);
       }
     }
 
-    // イベント紐付け
-    document.getElementById("btnSub").addEventListener("click", subscribePush);
-    document.getElementById("btnUnsub").addEventListener("click", unsubscribePush);
-    document.getElementById("btnFetch").addEventListener("click", fetchAndRender);
-    document.getElementById("btnSaveCred").addEventListener("click", saveCredFromPrompt);
+    // クリックイベント
+    $("btnSub").addEventListener("click", subscribePush);
+    $("btnUnsub").addEventListener("click", unsubscribePush);
+    $("btnFetch").addEventListener("click", fetchAndRender);
+    $("btnSaveCred").addEventListener("click", saveCredFromPrompt);
 
     // 初回自動取得
     fetchAndRender();
