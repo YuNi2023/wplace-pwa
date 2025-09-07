@@ -5,6 +5,7 @@ self.addEventListener('push', (event) => {
   } catch (e) {
     data = {};
   }
+
   event.waitUntil(
     self.registration.showNotification(
       data.title || 'Wplace通知',
