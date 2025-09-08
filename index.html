@@ -7,66 +7,19 @@
   <!-- 相対パスに注意 -->
   <link rel="manifest" href="./manifest.json" />
   <style>
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill,minmax(120px,1fr));
-      gap: 8px;
-      margin-top: .5rem;
-    }
     .card {
       border: 1px solid #ddd;
       border-radius: 10px;
-      padding: .5rem .6rem;
-      font-size: 14px;
+      padding: .75rem .9rem;
       background: #fff;
     }
-    .pill {
-      display: inline-block;
-      border: 1px solid #ddd;
-      border-radius: 999px;
-      padding: 2px 8px;
-      margin: 2px;
-      font-size: 12px;
-      background: #f8f8f8;
-    }
-    .color-chip {
-      display: inline-block;
-      width: 14px;
-      height: 14px;
-      border-radius: 3px;
-      border: 1px solid rgba(0,0,0,.15);
-      vertical-align: -2px;
-      margin-right: 6px;
-    }
-    .palette {
-      display: grid;
-      grid-template-columns: repeat(auto-fill,minmax(140px,1fr));
-      gap: 6px;
-      margin-top: .5rem;
-    }
-    .palette-item {
-      border: 1px solid #eee;
-      border-radius: 8px;
-      padding: 6px 8px;
-      background: #fafafa;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      opacity: .5;            /* 未解放は薄く */
-    }
-    .palette-item.unlocked {
-      background: #fff;
-      border-color: #ddd;
-      opacity: 1;             /* 解放済みははっきり */
-      box-shadow: 0 1px 0 rgba(0,0,0,.03);
-    }
+    .small { font-size: 12px; }
     .muted { color: #666; }
     .ok { color: #0a7; }
     .warn { color: #c60; }
     .err { color: #c00; }
-    .small { font-size: 12px; }
-    .kv { display:flex; gap:8px; flex-wrap:wrap; }
-    .kv > div { min-width: 160px; }
+    .kv { display:flex; gap:12px; flex-wrap:wrap; align-items:baseline; }
+    .kv > div { min-width: 180px; }
     .bar {
       position: relative;
       height: 10px;
@@ -94,13 +47,14 @@
     <button id="btnUnsub" type="button">購読を解除</button>
   </div>
 
-  <!-- ステータス表示 -->
+  <!-- ステータス表示（色表示は撤去） -->
   <section class="card">
     <h2 style="margin:0 0 .5rem 0">Wplace ステータス</h2>
     <div class="kv small">
       <div>Droplets: <strong id="droplets">-</strong></div>
-      <div>Paint: <strong id="paint">-</strong> <span class="small muted">(チャージ <span id="charges">-</span>)</span></div>
-      <div>Colors: <strong><span id="colorsSummary">-</span></strong></div>
+      <div>Paint: <strong id="paint">-</strong>
+        <span class="small muted">(チャージ <span id="charges">-</span>)</span>
+      </div>
     </div>
 
     <!-- チャージ進捗バー -->
@@ -108,20 +62,11 @@
       <div class="bar" aria-label="charge progress"><span id="chargeBar"></span></div>
     </div>
 
-    <!-- 解放済み色の名前一覧（カンマ区切り） -->
-    <div id="unlockedList" class="small muted" style="margin-top:.5rem">-</div>
-
     <div style="margin-top:.75rem;display:flex;gap:.5rem;flex-wrap:wrap">
       <button id="btnFetch" type="button">最新情報を取得</button>
       <button id="btnSaveCred" type="button">この端末の Cookie を保存</button>
     </div>
     <p id="statusMsg" class="small muted" style="margin-top:.5rem"></p>
-  </section>
-
-  <!-- 全色パレット（解放済みはハイライト） -->
-  <section class="card" style="margin-top:1rem">
-    <h3 style="margin:0 0 .5rem 0">全色パレット</h3>
-    <div id="palette" class="palette"></div>
   </section>
 
   <noscript>このアプリを使うには JavaScript を有効にしてください。</noscript>
@@ -132,9 +77,6 @@
     const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
     const CLIENT_ID    = "01dcea86-1c4a-4d3c-9495-25559529efc0";
     const ACCT_ID      = "mariko09229@gmail.com";
-
-    // 色テーブル
-    import { colorNamesFromIds, COLOR_TABLE } from "./src/colors.js";
 
     // ===== 便利関数 =====
     const $ = (id) => document.getElementById(id);
@@ -158,7 +100,7 @@
 
     async function ensureSW() {
       if (!("serviceWorker" in navigator)) throw new Error("ServiceWorker unsupported");
-      const reg = await navigator.serviceWorker.register("./sw.js");
+      const reg = await navigator.serviceWorker.register("./sw.js"); // 相対パス
       return reg;
     }
 
@@ -201,7 +143,7 @@
     }
 
     // ===== レンダリング補助 =====
-    function renderCharges(count, max, cooldownMs) {
+    function renderCharges(count, max) {
       $("charges").textContent = `${count}/${max}`;
       const ratio = !max ? 0 : Math.max(0, Math.min(1, count / max));
       $("chargeBar").style.width = `${ratio * 100}%`;
@@ -209,41 +151,7 @@
       $("paint").className = count >= 1 ? "ok" : "warn";
     }
 
-    function renderUnlockedNames(ids) {
-      const names = colorNamesFromIds(ids);
-      $("unlockedList").textContent = names.length ? names.join(", ") : "-";
-      $("colorsSummary").textContent = `解放済み ${names.length} / 全 ${Object.keys(COLOR_TABLE).length} 色`;
-    }
-
-    function cssColorByName(name) {
-      // 名前から色コードを直には出せないので、名前をそのまま背景には使えません。
-      // チップは名前を表示するだけにしておきます（必要なら別途名前→色のRGB表を作る）。
-      return "#fff";
-    }
-
-    function buildPalette(unlockedSet) {
-      const el = $("palette");
-      el.innerHTML = "";
-      // COLOR_TABLE の「id昇順」で並べる
-      const allIds = Object.keys(COLOR_TABLE).map(n => Number(n)).sort((a,b)=>a-b);
-      for (const id of allIds) {
-        const name = COLOR_TABLE[id];
-        const item = document.createElement("div");
-        item.className = "palette-item" + (unlockedSet.has(id) ? " unlocked" : "");
-        const chip = document.createElement("span");
-        chip.className = "color-chip";
-        // 任意: 名前ベースの見本色は未定義なので白いチップに（色コード表ができたら置き換え）
-        chip.style.background = "#fff";
-        chip.title = `id=${id}`;
-        const label = document.createElement("span");
-        label.textContent = `${name} (id:${id})`;
-        item.appendChild(chip);
-        item.appendChild(label);
-        el.appendChild(item);
-      }
-    }
-
-    // ===== ステータス取得 & 表示 =====
+    // ===== ステータス取得 & 表示（色は表示しない）=====
     async function fetchAndRender() {
       const url  = `${WORKERS_BASE}/api/test-fetch`;
       const body = { clientId: CLIENT_ID, acctId: ACCT_ID };
@@ -260,14 +168,8 @@
         const st = j.status || {};
         $("droplets").textContent = st.droplets ?? "-";
 
-        // charges 表示（count/max + バー + ready/cooldown）
         const c = st.charges || {};
-        renderCharges(Number(c.count ?? 0), Number(c.max ?? 0), Number(c.cooldownMs ?? 0));
-
-        // 解放色（ID配列）→ 名前の一覧 + 全パレット
-        const ids = Array.isArray(st.colors) ? st.colors : [];
-        renderUnlockedNames(ids);
-        buildPalette(new Set(ids));
+        renderCharges(Number(c.count ?? 0), Number(c.max ?? 0));
 
         setMsg("取得完了");
       } catch (e) {
@@ -294,10 +196,10 @@
     }
 
     // クリックイベント
-    $("btnSub").addEventListener("click", subscribePush);
-    $("btnUnsub").addEventListener("click", unsubscribePush);
-    $("btnFetch").addEventListener("click", fetchAndRender);
-    $("btnSaveCred").addEventListener("click", saveCredFromPrompt);
+    document.getElementById("btnSub").addEventListener("click", subscribePush);
+    document.getElementById("btnUnsub").addEventListener("click", unsubscribePush);
+    document.getElementById("btnFetch").addEventListener("click", fetchAndRender);
+    document.getElementById("btnSaveCred").addEventListener("click", saveCredFromPrompt);
 
     // 初回自動取得
     fetchAndRender();
