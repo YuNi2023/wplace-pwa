@@ -1,253 +1,156 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Wplace 管理アプリ (Push Deep Debug)</title>
-  <link rel="manifest" href="/manifest.json" />
+
+  <!-- iOS: ホーム画面アプリ化のためのメタ -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Wplace管理">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="/manifest.json?v=20250908">
+
+  <title>Wplace 管理アプリ</title>
+
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 16px; line-height: 1.6; }
-    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
-    #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 12px; border-radius: 8px; margin-top: 12px; max-height: 55vh; overflow: auto; }
-    code { background: #eee; padding: 2px 6px; border-radius: 4px; }
-    .ok { color: #0a0; }
-    .ng { color: #c00; }
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans JP",sans-serif;padding:16px;line-height:1.6}
+    code,pre{background:#111827;color:#a7f3d0;padding:12px;border-radius:8px;white-space:pre-wrap}
+    button{padding:10px 14px;border-radius:8px;border:1px solid #ccc;background:#fff}
+    .ok{color:#16a34a}.ng{color:#dc2626}.muted{opacity:.7}
   </style>
 </head>
 <body>
-  <h1>Push ディープデバッグ</h1>
+  <h1>PWA / Push 診断</h1>
 
-  <p>状態: <span id="state">init...</span></p>
-  <p>ディスプレイモード: <code id="mode"></code></p>
+  <p>状態: <span id="status" class="ng">未確認</span></p>
+  <p>ディスプレイモード: <code id="dm">-</code></p>
 
-  <div style="display:flex; gap:8px; flex-wrap:wrap;">
-    <button id="btn-register">購読を再登録</button>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+    <button id="btn-re-sub">購読を再登録</button>
     <button id="btn-unsub">購読を解除</button>
     <button id="btn-check">現在の購読を確認</button>
     <button id="btn-perm">通知許可を確認/要求</button>
   </div>
 
-  <h3>ログ</h3>
-  <div id="log"></div>
+  <h2>ログ</h2>
+  <pre id="log"></pre>
 
-  <script>
-    const WORKER_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
+<script>
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const dmEl = document.getElementById('dm');
 
-    const logEl = document.getElementById('log');
-    const stateEl = document.getElementById('state');
-    const modeEl = document.getElementById('mode');
+function log(m){ logEl.textContent += (m + '\n'); }
+function setOK(ok){ statusEl.textContent = ok ? 'OK' : '購読エラー'; statusEl.className = ok ? 'ok' : 'ng'; }
 
-    function log(...args) {
-      const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
-      console.log('[PWA]', ...args);
-      logEl.textContent += msg + '\n';
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-    function setState(s, ok=true) {
-      stateEl.textContent = s;
-      stateEl.className = ok ? 'ok' : 'ng';
-    }
-    function displayMode() {
-      const m = window.matchMedia('(display-mode: standalone)').matches ? 'standalone' :
-                (navigator.standalone ? 'standalone(legacy)' : 'browser');
-      modeEl.textContent = m;
-      return m;
-    }
+function displayMode(){
+  const modes = ['fullscreen','standalone','minimal-ui'];
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  if(isStandalone) return 'standalone';
+  for(const m of modes){ if(window.matchMedia(`(display-mode: ${m})`).matches) return m; }
+  return 'browser';
+}
 
-    async function urlBase64ToUint8Array(base64String) {
-      const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-      const raw = atob(base64);
-      const out = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; ++i) out[i] = raw.charCodeAt(i);
-      return out;
-    }
+async function getVAPID(){
+  const res = await fetch('/vapid-public-key',{cache:'no-store'});
+  const t = await res.text();
+  return t.trim();
+}
 
-    async function getVapidKey() {
-      const res = await fetch(`${WORKER_BASE}/vapid-public-key`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`vapid-public-key ${res.status}`);
-      const txt = (await res.text()).trim();
-      return txt;
-    }
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g,'+').replace(/_/g,'/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
 
-    async function ensureSW() {
-      if (!('serviceWorker' in navigator)) throw new Error('Service Worker非対応');
-      let reg = await navigator.serviceWorker.getRegistration();
-      if (!reg) {
-        log('SW: register start');
-        reg = await navigator.serviceWorker.register('/sw.js', { scope: './' });
-        log('SW: register OK');
-      } else {
-        log('SW: already registered');
-      }
-      const ready = await navigator.serviceWorker.ready;
-      return ready;
-    }
+async function ensureSW(){
+  if(!('serviceWorker' in navigator)) throw new Error('SW unsupported');
+  const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+  await navigator.serviceWorker.ready;
+  return reg;
+}
 
-    async function requestPermissionIfNeeded() {
-      const cur = Notification.permission;
-      log('通知許可 現在=', cur);
-      if (cur === 'granted') return 'granted';
-      if (cur === 'denied') return 'denied';
-      const res = await Notification.requestPermission();
-      log('通知許可 リクエスト結果=', res);
-      return res;
-    }
+async function subscribe(){
+  const reg = await ensureSW();
+  const key = (await getVAPID());
+  const keyBytes = urlBase64ToUint8Array(key);
+  log(`[VAPID] len=${key.length} decodedBytes=${keyBytes.length}`);
+  if(keyBytes.length !== 65){ throw new Error('VAPID invalid length'); }
 
-    async function dumpSupportInfo(reg) {
-      try {
-        const hasPushManager = !!window.PushManager;
-        const sub = await reg.pushManager.getSubscription();
-        const permState = reg.pushManager.permissionState ? await reg.pushManager.permissionState({ userVisibleOnly: true }) : 'unknown';
-        log('診断: PushManager=', hasPushManager, ' permissionState=', permState, ' 既存購読=', !!sub);
-        if (sub) log('診断: 既存 endpoint=', sub.endpoint);
-      } catch (e) {
-        log('診断: 取得失敗', String(e));
-      }
-    }
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: keyBytes
+  });
+  log('[4] 購読OK endpoint=' + sub.endpoint);
 
-    async function retry(fn, tries = 3, delayMs = 1000) {
-      let lastErr;
-      for (let i = 1; i <= tries; i++) {
-        try { return await fn(i); }
-        catch (e) {
-          lastErr = e;
-          log(`retry ${i}/${tries} failed:`, e?.message || String(e));
-          await new Promise(r => setTimeout(r, delayMs * i)); // 逓増
-        }
-      }
-      throw lastErr;
-    }
+  // サーバ保存
+  const resp = await fetch('/push/subscribe', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(sub)
+  });
+  if(!resp.ok){ throw new Error('save failed'); }
+  setOK(true);
+  alert('購読を登録しました！');
+}
 
-    async function subscribe() {
-      setState('subscribe…');
-      try {
-        displayMode();
-        const perm = await requestPermissionIfNeeded();
-        if (perm !== 'granted') {
-          setState('通知が許可されていません', false);
-          log('通知が許可されていません。iOSの「設定 > 通知」で当アプリを許可してください。');
-          return;
-        }
+async function unsubscribe(){
+  const reg = await ensureSW();
+  const sub = await reg.pushManager.getSubscription();
+  if(sub){ await sub.unsubscribe(); }
+  try{ await fetch('/push/unsubscribe', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({endpoint: sub?.endpoint||''}) }); }catch(e){}
+  log('購読を解除しました。');
+  setOK(false);
+}
 
-        const reg = await ensureSW();
-        await dumpSupportInfo(reg);
+async function checkSub(){
+  const reg = await ensureSW();
+  const perm = 'Notification' in window ? Notification.permission : 'unknown';
+  const sub = await reg.pushManager.getSubscription();
+  log(`診断: PushManager=${!!reg.pushManager} permissionState= ${perm} 既存購読= ${!!sub}`);
+}
 
-        const vapid = await getVapidKey();
-        const keyBytes = await urlBase64ToUint8Array(vapid);
-        log('VAPID(len)=', vapid.length, ' decodedBytes=', keyBytes.length);
-        if (keyBytes.length !== 65) {
-          throw new Error(`VAPID decoded length != 65 (=${keyBytes.length})`);
-        }
+async function askPerm(){
+  if(!('Notification' in window)){ log('通知非対応'); return; }
+  const before = Notification.permission;
+  let p = before;
+  if(before === 'default'){ p = await Notification.requestPermission(); }
+  log(`通知許可 現在= ${p}`);
+}
 
-        // 既存購読の掃除
-        let existing = await reg.pushManager.getSubscription();
-        if (existing) {
-          try {
-            log('既存購読をunsubscribeします…');
-            await existing.unsubscribe();
-            log('既存購読 unsubscribe OK');
-          } catch (e) {
-            log('既存購読 unsubscribe 失敗(続行):', String(e));
-          }
-        }
+(async ()=>{
+  const dm = displayMode();
+  dmEl.textContent = dm;
+  log(`[1] display-mode = ${dm}`);
 
-        // iOSで稀に subscribe が "Load failed" を返すのでリトライ
-        const sub = await retry(async (attempt) => {
-          log(`subscribe() attempt ${attempt}…`);
-          const s = await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: keyBytes,
-          });
-          return s;
-        }, 3, 1200);
+  try{
+    log('[2] SW 準備チェック ...');
+    await ensureSW();
+    log('[2] SW OK');
 
-        const payload = JSON.stringify(sub);
-        log('購読JSON先頭=', payload.slice(0, 160) + '…');
-
-        // サーバ保存
-        const resp = await fetch(`${WORKER_BASE}/push/subscribe`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: payload
-        });
-        const text = await resp.text();
-        log('サーバ応答=', text);
-        if (!resp.ok) throw new Error(`/push/subscribe ${resp.status}`);
-
-        setState('購読登録 OK');
-      } catch (e) {
-        setState('購読エラー', false);
-        log('購読エラー:', e?.message || String(e));
-        // ヒント出し
-        const msg = String(e);
-        if (msg.includes('Load failed')) {
-          log('ヒント: iCloudプライベートリレー / VPN / 「IPアドレスを非公開」等をOFFにして再試行してみてください。');
-          log('ヒント: 既存のPWAを削除 → 再度ホーム画面に追加 → 直後に購読登録 も有効です。');
-        }
-        if (msg.includes('VAPID decoded length')) {
-          log('ヒント: /vapid-public-key の値が途中で切れていないか、全角/改行混入がないか確認してください。');
-        }
-      }
-    }
-
-    async function check() {
-      try {
-        const reg = await navigator.serviceWorker.getRegistration();
-        if (!reg) { log('SW未登録'); setState('SW未登録', false); return; }
-        const sub = await reg.pushManager.getSubscription();
-        if (!sub) { log('購読なし'); setState('購読なし', false); return; }
-        log('現在の購読 endpoint=', sub.endpoint);
-        setState('購読あり');
-      } catch (e) {
-        setState('確認エラー', false);
-        log('確認エラー:', e?.message || String(e));
-      }
-    }
-
-    async function unsubscribe() {
-      try {
-        const reg = await navigator.serviceWorker.getRegistration();
-        if (!reg) { log('SWなし'); setState('SWなし', false); return; }
-        const sub = await reg.pushManager.getSubscription();
-        if (!sub) { log('購読なし'); setState('購読なし', false); return; }
-        const endpoint = sub.endpoint;
-        const ok = await sub.unsubscribe();
-        log('Browser unsubscribe=', ok);
-
-        const resp = await fetch(`${WORKER_BASE}/push/unsubscribe`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ endpoint })
-        });
-        const t = await resp.text();
-        log('サーバ削除応答=', t);
-
-        setState('購読解除 OK');
-      } catch (e) {
-        setState('解除エラー', false);
-        log('解除エラー:', e?.message || String(e));
-      }
-    }
-
-    document.getElementById('btn-register').addEventListener('click', subscribe);
-    document.getElementById('btn-unsub').addEventListener('click', unsubscribe);
-    document.getElementById('btn-check').addEventListener('click', check);
-    document.getElementById('btn-perm').addEventListener('click', requestPermissionIfNeeded);
-
-    // 初期ログ
-    (async () => {
-      displayMode();
-      log('[1] display-mode =', modeEl.textContent);
-      log('[2] SW 準備チェック…');
-      try {
-        await ensureSW();
-        log('[2] SW OK');
-      } catch (e) {
-        log('[2] SW 登録失敗:', e?.message || String(e));
-      }
-      log('[3] 通知許可 =', Notification.permission);
-    })();
-  </script>
+    await askPerm();
+  }catch(e){
+    log('SW/権限エラー: ' + e.message);
+  }
+})();
+document.getElementById('btn-re-sub').onclick = async ()=>{
+  try{
+    const reg = await ensureSW();
+    const exist = await reg.pushManager.getSubscription();
+    if(exist){ await exist.unsubscribe(); log('旧購読を解除'); }
+    await subscribe();
+  }catch(e){
+    log('購読エラー: ' + (e.message||e));
+    log('ヒント: iCloudプライベートリレー / VPN / 「IPアドレスを非公開」等をOFFにして再試行してみてください。');
+  }
+};
+document.getElementById('btn-unsub').onclick = ()=>unsubscribe();
+document.getElementById('btn-check').onclick = ()=>checkSub();
+document.getElementById('btn-perm').onclick = ()=>askPerm();
+</script>
 </body>
 </html>
