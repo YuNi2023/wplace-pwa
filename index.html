@@ -2,155 +2,203 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- iOS: ホーム画面アプリ化のためのメタ -->
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Wplace管理">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Wplace管理" />
 
-  <!-- PWA manifest -->
-  <link rel="manifest" href="/manifest.json?v=20250908">
+  <meta name="theme-color" content="#0ea5e9" />
 
-  <title>Wplace 管理アプリ</title>
+  <!-- ★ 重要：manifest も相対パス -->
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
+  <title>PWA / Push 診断</title>
   <style>
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans JP",sans-serif;padding:16px;line-height:1.6}
-    code,pre{background:#111827;color:#a7f3d0;padding:12px;border-radius:8px;white-space:pre-wrap}
-    button{padding:10px 14px;border-radius:8px;border:1px solid #ccc;background:#fff}
-    .ok{color:#16a34a}.ng{color:#dc2626}.muted{opacity:.7}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:20px;line-height:1.6}
+    .log{background:#0b1020;color:#a7f3d0;border-radius:12px;padding:16px;white-space:pre-wrap}
+    button{margin:6px 8px 6px 0;padding:10px 14px;border-radius:8px;border:1px solid #ccc;background:#fff}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#eee;margin-left:6px}
+    .error{color:#ef4444}
+    .ok{color:#10b981}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   </style>
 </head>
 <body>
   <h1>PWA / Push 診断</h1>
 
-  <p>状態: <span id="status" class="ng">未確認</span></p>
-  <p>ディスプレイモード: <code id="dm">-</code></p>
+  <p>状態: <span id="state" class="badge">未確認</span></p>
+  <p>ディスプレイモード: <code id="dm" class="mono">unknown</code></p>
 
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+  <div>
     <button id="btn-re-sub">購読を再登録</button>
     <button id="btn-unsub">購読を解除</button>
-    <button id="btn-check">現在の購読を確認</button>
+    <button id="btn-show">現在の購読を確認</button>
     <button id="btn-perm">通知許可を確認/要求</button>
   </div>
 
   <h2>ログ</h2>
-  <pre id="log"></pre>
+  <div id="log" class="log"></div>
 
-<script>
-const logEl = document.getElementById('log');
-const statusEl = document.getElementById('status');
-const dmEl = document.getElementById('dm');
+  <script>
+    // ★ あなたの Workers エンドポイント
+    const WORKER_BASE = 'https://wplace-push.wplace-push-rinne.workers.dev';
 
-function log(m){ logEl.textContent += (m + '\n'); }
-function setOK(ok){ statusEl.textContent = ok ? 'OK' : '購読エラー'; statusEl.className = ok ? 'ok' : 'ng'; }
+    const $ = (id) => document.getElementById(id);
+    const log = (t) => { $('log').textContent += (t + '\n'); };
+    const setState = (txt, ok=false) => {
+      const el = $('state');
+      el.textContent = txt;
+      el.className = 'badge ' + (ok ? 'ok' : (txt.includes('エラー') ? 'error' : ''));
+    };
 
-function displayMode(){
-  const modes = ['fullscreen','standalone','minimal-ui'];
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
-  if(isStandalone) return 'standalone';
-  for(const m of modes){ if(window.matchMedia(`(display-mode: ${m})`).matches) return m; }
-  return 'browser';
-}
+    // display-mode 表示
+    function showDisplayMode(){
+      const modes = ['fullscreen','standalone','minimal-ui','browser','window-controls-overlay'];
+      let cur = 'browser';
+      for (const m of modes){
+        const mq = window.matchMedia('(display-mode:'+m+')');
+        if (mq.matches) { cur = m; break; }
+      }
+      $('dm').textContent = cur;
+      log(`[1] display-mode = ${cur}`);
+      return cur;
+    }
 
-async function getVAPID(){
-  const res = await fetch('/vapid-public-key',{cache:'no-store'});
-  const t = await res.text();
-  return t.trim();
-}
+    // ★ Service Worker 登録（相対パスで /wplace-pwa/ 配下をスコープに）
+    async function ensureSW(){
+      if (!('serviceWorker' in navigator)) throw new Error('SW unsupported');
+      try {
+        // 重要：./sw.js & scope: './'
+        const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+        await navigator.serviceWorker.ready;
+        log('SW: ready');
+        return reg;
+      } catch (e){
+        log(`SW/権限エラー: ${e.name || ''}\n${e.message || e}`);
+        throw e;
+      }
+    }
 
-function urlBase64ToUint8Array(base64String){
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g,'+').replace(/_/g,'/');
-  const rawData = atob(base64);
-  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
-}
+    // 通知許可の確認/要求
+    async function ensurePermission(){
+      const state = Notification.permission; // default / granted / denied
+      log(`[3] 通知許可 = ${state}`);
+      if (state === 'granted') return 'granted';
+      const p = await Notification.requestPermission();
+      log(`通知許可 現在= ${p}`);
+      return p;
+    }
 
-async function ensureSW(){
-  if(!('serviceWorker' in navigator)) throw new Error('SW unsupported');
-  const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-  await navigator.serviceWorker.ready;
-  return reg;
-}
+    // VAPID 公開鍵取得
+    async function getVapidKey(){
+      const res = await fetch(`${WORKER_BASE}/vapid-public-key`);
+      if (!res.ok) throw new Error('VAPID key fetch failed');
+      const key = (await res.text()).trim();
+      return key;
+    }
 
-async function subscribe(){
-  const reg = await ensureSW();
-  const key = (await getVAPID());
-  const keyBytes = urlBase64ToUint8Array(key);
-  log(`[VAPID] len=${key.length} decodedBytes=${keyBytes.length}`);
-  if(keyBytes.length !== 65){ throw new Error('VAPID invalid length'); }
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const rawData = atob(base64);
+      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+    }
 
-  const sub = await reg.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: keyBytes
-  });
-  log('[4] 購読OK endpoint=' + sub.endpoint);
+    async function subscribe() {
+      setState('購読中…');
+      try {
+        const perm = await ensurePermission();
+        if (perm !== 'granted') throw new Error('通知許可がありません');
 
-  // サーバ保存
-  const resp = await fetch('/push/subscribe', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(sub)
-  });
-  if(!resp.ok){ throw new Error('save failed'); }
-  setOK(true);
-  alert('購読を登録しました！');
-}
+        const reg = await ensureSW();
+        const vapid = await getVapidKey();
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapid)
+        });
 
-async function unsubscribe(){
-  const reg = await ensureSW();
-  const sub = await reg.pushManager.getSubscription();
-  if(sub){ await sub.unsubscribe(); }
-  try{ await fetch('/push/unsubscribe', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({endpoint: sub?.endpoint||''}) }); }catch(e){}
-  log('購読を解除しました。');
-  setOK(false);
-}
+        // サーバへ購読を保存
+        const r2 = await fetch(`${WORKER_BASE}/push/subscribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sub)
+        });
+        if (!r2.ok) throw new Error('サーバ保存失敗');
+        log('[✓] 購読登録 完了');
+        setState('購読OK', true);
+      } catch (e){
+        log(`購読エラー: ${e.message || e}`);
+        setState('購読エラー');
+      }
+    }
 
-async function checkSub(){
-  const reg = await ensureSW();
-  const perm = 'Notification' in window ? Notification.permission : 'unknown';
-  const sub = await reg.pushManager.getSubscription();
-  log(`診断: PushManager=${!!reg.pushManager} permissionState= ${perm} 既存購読= ${!!sub}`);
-}
+    async function unsubscribe() {
+      try{
+        const reg = await navigator.serviceWorker.getRegistration('./');
+        if (!reg) { log('SW: なし'); return; }
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await sub.unsubscribe();
+          await fetch(`${WORKER_BASE}/push/unsubscribe`, {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(sub)
+          }).catch(() => {});
+          log('購読を解除しました。');
+        } else {
+          log('購読なし');
+        }
+        setState('未購読');
+      } catch (e){
+        log(`解除エラー: ${e.message || e}`);
+      }
+    }
 
-async function askPerm(){
-  if(!('Notification' in window)){ log('通知非対応'); return; }
-  const before = Notification.permission;
-  let p = before;
-  if(before === 'default'){ p = await Notification.requestPermission(); }
-  log(`通知許可 現在= ${p}`);
-}
+    async function showCurrent() {
+      const reg = await navigator.serviceWorker.getRegistration('./');
+      if (!reg) { log('SW: なし'); return; }
+      const sub = await reg.pushManager.getSubscription();
+      if (!sub) { log('現在の購読: なし'); return; }
+      log('現在の購読: ' + JSON.stringify(sub.toJSON(), null, 2));
+    }
 
-(async ()=>{
-  const dm = displayMode();
-  dmEl.textContent = dm;
-  log(`[1] display-mode = ${dm}`);
+    // 画面初期化
+    (async () => {
+      showDisplayMode();
 
-  try{
-    log('[2] SW 準備チェック ...');
-    await ensureSW();
-    log('[2] SW OK');
+      try{
+        await ensureSW();
+        log('[2] SW OK');
+      }catch(e){
+        log('SW 準備チェック ... 失敗');
+        setState('未確認');
+        return;
+      }
 
-    await askPerm();
-  }catch(e){
-    log('SW/権限エラー: ' + e.message);
-  }
-})();
-document.getElementById('btn-re-sub').onclick = async ()=>{
-  try{
-    const reg = await ensureSW();
-    const exist = await reg.pushManager.getSubscription();
-    if(exist){ await exist.unsubscribe(); log('旧購読を解除'); }
-    await subscribe();
-  }catch(e){
-    log('購読エラー: ' + (e.message||e));
-    log('ヒント: iCloudプライベートリレー / VPN / 「IPアドレスを非公開」等をOFFにして再試行してみてください。');
-  }
-};
-document.getElementById('btn-unsub').onclick = ()=>unsubscribe();
-document.getElementById('btn-check').onclick = ()=>checkSub();
-document.getElementById('btn-perm').onclick = ()=>askPerm();
-</script>
+      const perm = Notification.permission;
+      log(`通知許可 現在= ${perm}`);
+
+      // iOS Safari でのヒント
+      log('診断: PushManager= ' + ('PushManager' in window) + '  permissionState= ' + Notification.permission);
+
+      // 既存購読があるかざっくり
+      try{
+        const reg = await navigator.serviceWorker.getRegistration('./');
+        const sub = await reg?.pushManager.getSubscription();
+        if (sub) setState('購読OK', true);
+        else setState('未購読');
+      }catch{}
+
+      // ボタン
+      $('btn-re-sub').addEventListener('click', subscribe);
+      $('btn-unsub').addEventListener('click', unsubscribe);
+      $('btn-show').addEventListener('click', showCurrent);
+      $('btn-perm').addEventListener('click', ensurePermission);
+    })();
+  </script>
 </body>
 </html>
