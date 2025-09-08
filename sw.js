@@ -1,59 +1,43 @@
-// sw.js — Pull方式：空Push受信→サーバから本文取得→通知表示
-
-const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
-
-self.addEventListener("install", (e) => {
+self.addEventListener('install', (e) => {
+  // すぐに新SWを有効化
   self.skipWaiting();
 });
-self.addEventListener("activate", (e) => {
+
+self.addEventListener('activate', (e) => {
+  // 既存クライアントに即時適用
   e.waitUntil(self.clients.claim());
 });
 
-// Push 受信：内容はサーバから取得（Pull）
-self.addEventListener("push", (event) => {
-  event.waitUntil((async () => {
-    try {
-      const reg = self.registration;
-      const sub = await reg.pushManager.getSubscription();
-      const endpoint = sub?.endpoint || "";
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    if (event.data) data = event.data.json();
+  } catch (_e) {
+    // JSONでない場合はテキストとして扱う
+    data = { title: '通知', body: event.data?.text() ?? '' };
+  }
 
-      // サーバから直近メッセージを取得（endpoint で逆引き）
-      const url = new URL("/api/last-message", WORKERS_BASE);
-      if (endpoint) url.searchParams.set("endpoint", endpoint);
-      const resp = await fetch(url.toString(), { method: "GET" });
-      let data = {};
-      if (resp.ok) data = await resp.json();
+  const title = data.title || '通知';
+  const options = {
+    body: data.body || '',
+    icon: data.icon || '/icon-192.png',
+    badge: data.badge || '/icon-192.png',
+    data: data, // クリック遷移用に保持
+  };
 
-      const title = data.title || "通知";
-      const body  = data.body  || "新しいお知らせがあります";
-      const nopts = {
-        body,
-        icon: "/icons/icon-192.png",
-        badge: "/icons/icon-192.png",
-        data: { url: data.url || "" }
-      };
-      await reg.showNotification(title, nopts);
-    } catch (err) {
-      // フォールバック：サーバ取得に失敗しても鳴らす
-      await self.registration.showNotification("通知", {
-        body: "新しいお知らせがあります",
-        icon: "/icons/icon-192.png",
-        badge: "/icons/icon-192.png"
-      });
-    }
-  })());
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// 通知をタップしたときに URL があれば開く
-self.addEventListener("notificationclick", (event) => {
+self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const url = event.notification.data?.url;
   if (url) {
-    event.waitUntil((async () => {
-      const all = await clients.matchAll({ type: "window", includeUncontrolled: true });
-      const client = all.find(c => new URL(c.url).href === url);
-      if (client) return client.focus();
-      return clients.openWindow(url);
-    })());
+    event.waitUntil(
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then(winArr => {
+        const had = winArr.find(w => w.url === url);
+        if (had) return had.focus();
+        return clients.openWindow(url);
+      })
+    );
   }
 });
