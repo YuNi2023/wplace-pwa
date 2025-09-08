@@ -3,19 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Wplace 管理アプリ (Push Debug)</title>
+  <title>Wplace 管理アプリ (Push Deep Debug)</title>
   <link rel="manifest" href="/manifest.json" />
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 16px; line-height: 1.6; }
     button { padding: 10px 14px; border-radius: 8px; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
-    #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 12px; border-radius: 8px; margin-top: 12px; max-height: 50vh; overflow: auto; }
+    #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 12px; border-radius: 8px; margin-top: 12px; max-height: 55vh; overflow: auto; }
     code { background: #eee; padding: 2px 6px; border-radius: 4px; }
     .ok { color: #0a0; }
     .ng { color: #c00; }
   </style>
 </head>
 <body>
-  <h1>Pushデバッグ</h1>
+  <h1>Push ディープデバッグ</h1>
 
   <p>状態: <span id="state">init...</span></p>
   <p>ディスプレイモード: <code id="mode"></code></p>
@@ -43,12 +43,10 @@
       logEl.textContent += msg + '\n';
       logEl.scrollTop = logEl.scrollHeight;
     }
-
     function setState(s, ok=true) {
       stateEl.textContent = s;
       stateEl.className = ok ? 'ok' : 'ng';
     }
-
     function displayMode() {
       const m = window.matchMedia('(display-mode: standalone)').matches ? 'standalone' :
                 (navigator.standalone ? 'standalone(legacy)' : 'browser');
@@ -60,25 +58,20 @@
       const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
       const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
       const raw = atob(base64);
-      const outputArray = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; ++i) outputArray[i] = raw.charCodeAt(i);
-      return outputArray;
+      const out = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; ++i) out[i] = raw.charCodeAt(i);
+      return out;
     }
 
     async function getVapidKey() {
-      const res = await fetch(`${WORKER_BASE}/vapid-public-key`);
+      const res = await fetch(`${WORKER_BASE}/vapid-public-key`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`vapid-public-key ${res.status}`);
       const txt = (await res.text()).trim();
-      if (!txt || /[^A-Za-z0-9\-\_]/.test(txt)) {
-        // ほぼありえませんが、誤ったキー文字列検出用
-        throw new Error('VAPID 公開鍵の形式が不正です');
-      }
       return txt;
     }
 
     async function ensureSW() {
       if (!('serviceWorker' in navigator)) throw new Error('Service Worker非対応');
-      // 2重登録対策：既存があればそれを使う
       let reg = await navigator.serviceWorker.getRegistration();
       if (!reg) {
         log('SW: register start');
@@ -87,9 +80,7 @@
       } else {
         log('SW: already registered');
       }
-      // ready 待機
       const ready = await navigator.serviceWorker.ready;
-      if (!ready) throw new Error('SW ready 取得失敗');
       return ready;
     }
 
@@ -101,6 +92,31 @@
       const res = await Notification.requestPermission();
       log('通知許可 リクエスト結果=', res);
       return res;
+    }
+
+    async function dumpSupportInfo(reg) {
+      try {
+        const hasPushManager = !!window.PushManager;
+        const sub = await reg.pushManager.getSubscription();
+        const permState = reg.pushManager.permissionState ? await reg.pushManager.permissionState({ userVisibleOnly: true }) : 'unknown';
+        log('診断: PushManager=', hasPushManager, ' permissionState=', permState, ' 既存購読=', !!sub);
+        if (sub) log('診断: 既存 endpoint=', sub.endpoint);
+      } catch (e) {
+        log('診断: 取得失敗', String(e));
+      }
+    }
+
+    async function retry(fn, tries = 3, delayMs = 1000) {
+      let lastErr;
+      for (let i = 1; i <= tries; i++) {
+        try { return await fn(i); }
+        catch (e) {
+          lastErr = e;
+          log(`retry ${i}/${tries} failed:`, e?.message || String(e));
+          await new Promise(r => setTimeout(r, delayMs * i)); // 逓増
+        }
+      }
+      throw lastErr;
     }
 
     async function subscribe() {
@@ -115,51 +131,62 @@
         }
 
         const reg = await ensureSW();
+        await dumpSupportInfo(reg);
 
         const vapid = await getVapidKey();
-        log('VAPID=', vapid);
+        const keyBytes = await urlBase64ToUint8Array(vapid);
+        log('VAPID(len)=', vapid.length, ' decodedBytes=', keyBytes.length);
+        if (keyBytes.length !== 65) {
+          throw new Error(`VAPID decoded length != 65 (=${keyBytes.length})`);
+        }
 
-        // 既存購読チェック
-        let sub = await reg.pushManager.getSubscription();
-        if (sub) {
-          log('既存購読あり → 一旦unsubscribeして再取得');
+        // 既存購読の掃除
+        let existing = await reg.pushManager.getSubscription();
+        if (existing) {
           try {
-            await sub.unsubscribe();
+            log('既存購読をunsubscribeします…');
+            await existing.unsubscribe();
+            log('既存購読 unsubscribe OK');
           } catch (e) {
-            log('unsubscribe失敗（続行）', String(e));
+            log('既存購読 unsubscribe 失敗(続行):', String(e));
           }
         }
 
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: await urlBase64ToUint8Array(vapid),
-        });
+        // iOSで稀に subscribe が "Load failed" を返すのでリトライ
+        const sub = await retry(async (attempt) => {
+          log(`subscribe() attempt ${attempt}…`);
+          const s = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: keyBytes,
+          });
+          return s;
+        }, 3, 1200);
 
         const payload = JSON.stringify(sub);
-        log('購読JSON=', payload.slice(0, 140) + '…');
+        log('購読JSON先頭=', payload.slice(0, 160) + '…');
 
+        // サーバ保存
         const resp = await fetch(`${WORKER_BASE}/push/subscribe`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: payload
         });
+        const text = await resp.text();
+        log('サーバ応答=', text);
+        if (!resp.ok) throw new Error(`/push/subscribe ${resp.status}`);
 
-        const data = await resp.text();
-        log('サーバ応答=', data);
-        if (!resp.ok) {
-          setState(`サーバ保存失敗(${resp.status})`, false);
-          return;
-        }
         setState('購読登録 OK');
       } catch (e) {
         setState('購読エラー', false);
         log('購読エラー:', e?.message || String(e));
-        // 追加ヒント
-        if (String(e).includes('NotAllowedError')) {
-          log('ヒント: 通知がOS側で拒否されています。設定 > 通知 で許可してください。');
+        // ヒント出し
+        const msg = String(e);
+        if (msg.includes('Load failed')) {
+          log('ヒント: iCloudプライベートリレー / VPN / 「IPアドレスを非公開」等をOFFにして再試行してみてください。');
+          log('ヒント: 既存のPWAを削除 → 再度ホーム画面に追加 → 直後に購読登録 も有効です。');
         }
-        if (String(e).includes('InvalidCharacterError')) {
-          log('ヒント: VAPID公開鍵のBase64URL形式が崩れている可能性。/vapid-public-key の値をそのまま使っているか確認。');
+        if (msg.includes('VAPID decoded length')) {
+          log('ヒント: /vapid-public-key の値が途中で切れていないか、全角/改行混入がないか確認してください。');
         }
       }
     }
@@ -188,7 +215,6 @@
         const ok = await sub.unsubscribe();
         log('Browser unsubscribe=', ok);
 
-        // サーバからも削除（存在しなくてもOK）
         const resp = await fetch(`${WORKER_BASE}/push/unsubscribe`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
