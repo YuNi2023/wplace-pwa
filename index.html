@@ -4,15 +4,14 @@
   <meta charset="UTF-8" />
   <title>Wplace管理アプリ</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- 相対パスに注意 -->
   <link rel="manifest" href="./manifest.json" />
   <style>
-    .card {
-      border: 1px solid #ddd;
-      border-radius: 10px;
-      padding: .75rem .9rem;
-      background: #fff;
-    }
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; margin: 16px; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    h2 { font-size: 18px; margin: 0 0 8px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: .75rem .9rem; background: #fff; }
     .small { font-size: 12px; }
     .muted { color: #666; }
     .ok { color: #0a7; }
@@ -20,34 +19,46 @@
     .err { color: #c00; }
     .kv { display:flex; gap:12px; flex-wrap:wrap; align-items:baseline; }
     .kv > div { min-width: 180px; }
-    .bar {
-      position: relative;
-      height: 10px;
-      background: #eee;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-    .bar > span {
-      position: absolute;
-      left: 0; top: 0; bottom: 0;
-      width: 0%;
-      background: linear-gradient(90deg,#59f,#3bc);
-    }
+    .bar { position: relative; height: 10px; background: #eee; border-radius: 999px; overflow: hidden; }
+    .bar > span { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: linear-gradient(90deg,#59f,#3bc); }
+    select, input[type="text"] { padding:.4rem .5rem; border:1px solid #ccc; border-radius:8px; }
+    button { padding:.45rem .7rem; border:1px solid #ccc; border-radius:8px; background:#f7f7f7; }
+    button:active { transform: translateY(1px); }
+    .grow { flex: 1 1 auto; min-width: 220px; }
   </style>
 </head>
 <body>
   <h1>Wplace 管理アプリ</h1>
-
-  <!-- 表示モード確認 -->
   <p id="mode" class="small muted"></p>
 
-  <!-- 通知操作 -->
-  <div style="margin:.75rem 0; display:flex; gap:.5rem; flex-wrap:wrap">
+  <!-- 通知 -->
+  <div class="row" style="margin:.75rem 0">
     <button id="btnSub" type="button">通知を有効化 / 再登録</button>
     <button id="btnUnsub" type="button">購読を解除</button>
   </div>
 
-  <!-- ステータス表示（色表示は撤去） -->
+  <!-- アカウント切替 -->
+  <section class="card" style="margin:.5rem 0 1rem">
+    <h2>アカウント</h2>
+    <div class="row" style="gap:10px; margin-top:.25rem">
+      <label class="small muted">選択：</label>
+      <select id="acctSelect" class="grow"></select>
+      <button id="btnAcctRefresh" type="button">リスト更新</button>
+    </div>
+    <div class="row" style="gap:10px; margin-top:.5rem">
+      <input id="newAcctId" class="grow" type="text" placeholder="acctId（メールなど）">
+      <input id="newAcctLabel" class="grow" type="text" placeholder="表示名（任意）">
+      <button id="btnAcctAdd" type="button">追加</button>
+      <button id="btnAcctDel" type="button">削除</button>
+      <button id="btnSaveCred" type="button">この端末のCookieを保存</button>
+    </div>
+    <p class="small muted" style="margin-top:.4rem">
+      ※ 追加後、対象アカウントが選択された状態で「この端末のCookieを保存」を押し、<br>
+      <code>j=...; cf_clearance=...</code> のような Cookie 全体を貼り付けてください。
+    </p>
+  </section>
+
+  <!-- ステータス -->
   <section class="card">
     <h2 style="margin:0 0 .5rem 0">Wplace ステータス</h2>
     <div class="kv small">
@@ -55,6 +66,7 @@
       <div>Paint: <strong id="paint">-</strong>
         <span class="small muted">(チャージ <span id="charges">-</span>)</span>
       </div>
+      <div>最終更新: <span id="lastUpdated" class="small muted">-</span></div>
     </div>
 
     <!-- チャージ進捗バー -->
@@ -62,29 +74,39 @@
       <div class="bar" aria-label="charge progress"><span id="chargeBar"></span></div>
     </div>
 
-    <div style="margin-top:.75rem;display:flex;gap:.5rem;flex-wrap:wrap">
+    <div class="small" style="margin-top:.5rem">
+      <div>次の1チャージ回復予定: <strong id="etaNext">-</strong></div>
+      <div>満タン（全回復）予定: <strong id="etaFull">-</strong></div>
+    </div>
+
+    <div class="row" style="margin-top:.75rem">
       <button id="btnFetch" type="button">最新情報を取得</button>
-      <button id="btnSaveCred" type="button">この端末の Cookie を保存</button>
+      <button id="btnRunCron" type="button" title="（管理者トークンが必要）">サーバで定期チェック実行</button>
     </div>
     <p id="statusMsg" class="small muted" style="margin-top:.5rem"></p>
   </section>
 
   <noscript>このアプリを使うには JavaScript を有効にしてください。</noscript>
 
-  <!-- ES Modules -->
   <script type="module">
     // ===== 設定 =====
     const WORKERS_BASE = "https://wplace-push.wplace-push-rinne.workers.dev";
     const CLIENT_ID    = "01dcea86-1c4a-4d3c-9495-25559529efc0";
-    const ACCT_ID      = "mariko09229@gmail.com";
 
-    // ===== 便利関数 =====
+    // デフォルト（初回用のフォールバック）
+    const FALLBACK_ACCT_ID = "mariko09229@gmail.com";
+
+    // ===== ユーティリティ =====
     const $ = (id) => document.getElementById(id);
     function setMsg(t, isErr=false) {
       const p = $("statusMsg");
       p.textContent = t || "";
       p.className = "small " + (isErr ? "err" : "muted");
       if (isErr) console.error(t); else console.log(t);
+    }
+    function fmtDate(ts) {
+      if (!ts) return "-";
+      return new Date(ts).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
     }
 
     // 表示モード
@@ -97,10 +119,9 @@
       const rawData = atob(base64);
       return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
     }
-
     async function ensureSW() {
       if (!("serviceWorker" in navigator)) throw new Error("ServiceWorker unsupported");
-      const reg = await navigator.serviceWorker.register("./sw.js"); // 相対パス
+      const reg = await navigator.serviceWorker.register("./sw.js");
       return reg;
     }
 
@@ -110,12 +131,10 @@
         const reg = await ensureSW();
         const vapidKey = await fetch(`${WORKERS_BASE}/vapid-public-key`).then(r => r.text());
         if (!vapidKey) throw new Error("VAPID 公開鍵が取得できませんでした");
-
         const sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: await urlBase64ToUint8Array(vapidKey)
         });
-
         const res = await fetch(`${WORKERS_BASE}/push/subscribe`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -129,7 +148,6 @@
         console.error(e);
       }
     }
-
     async function unsubscribePush() {
       try {
         const reg = await ensureSW();
@@ -142,7 +160,103 @@
       }
     }
 
-    // ===== レンダリング補助 =====
+    // ===== アカウント管理（Workersの /api/accounts を使用）=====
+    let ACCT_ID = localStorage.getItem("activeAcct") || FALLBACK_ACCT_ID;
+
+    async function loadAccounts() {
+      const u = new URL(`${WORKERS_BASE}/api/accounts`);
+      u.searchParams.set("clientId", CLIENT_ID);
+      const res = await fetch(u.toString());
+      if (!res.ok) return [];
+      const j = await res.json().catch(()=>({ items:[] }));
+      return Array.isArray(j.items) ? j.items : [];
+    }
+    function fillSelect(items) {
+      const sel = $("acctSelect");
+      sel.innerHTML = "";
+      if (!items.length) {
+        const opt = document.createElement("option");
+        opt.value = ACCT_ID;
+        opt.textContent = `${ACCT_ID}（未登録）`;
+        sel.appendChild(opt);
+        sel.value = ACCT_ID;
+        return;
+      }
+      for (const it of items) {
+        const opt = document.createElement("option");
+        opt.value = it.acctId;
+        opt.textContent = it.label || it.acctId;
+        sel.appendChild(opt);
+      }
+      // 保存済み選択がリストに無ければ先頭
+      if (!items.some(it => it.acctId === ACCT_ID)) ACCT_ID = items[0].acctId;
+      sel.value = ACCT_ID;
+    }
+
+    async function refreshAccountList() {
+      const items = await loadAccounts().catch(()=>[]);
+      fillSelect(items);
+    }
+
+    async function addAccount(acctId, label) {
+      const body = { clientId: CLIENT_ID, acctId, label, notify: true };
+      const res = await fetch(`${WORKERS_BASE}/api/accounts`, {
+        method: "POST", headers: { "Content-Type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      const j = await res.json().catch(()=> ({}));
+      if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      await refreshAccountList();
+      $("acctSelect").value = acctId;
+      ACCT_ID = acctId;
+      localStorage.setItem("activeAcct", ACCT_ID);
+    }
+
+    async function deleteAccount(acctId) {
+      const body = { clientId: CLIENT_ID, acctId };
+      const res = await fetch(`${WORKERS_BASE}/api/accounts`, {
+        method: "DELETE", headers: { "Content-Type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      const j = await res.json().catch(()=> ({}));
+      if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      await refreshAccountList();
+      // 先頭に切替
+      const sel = $("acctSelect");
+      ACCT_ID = sel.value;
+      localStorage.setItem("activeAcct", ACCT_ID);
+    }
+
+    async function saveCredFromPrompt() {
+      const token = prompt("Cookie 全体（例: j=...; cf_clearance=...）を貼り付け:");
+      if (!token) return;
+      const body = { clientId: CLIENT_ID, acctId: ACCT_ID, token };
+      const res = await fetch(`${WORKERS_BASE}/api/accounts/cred`, {
+        method: "POST", headers: { "Content-Type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      const j = await res.json().catch(()=> ({}));
+      if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      setMsg("認証情報を保存しました。");
+    }
+
+    // ===== ETA 算出（charges.count / charges.max / charges.cooldownMs）=====
+    function calcEta(count, max, cooldownMs) {
+      // count は小数。1チャージ回復に cooldownMs[ms]、リニアに増加している前提。
+      const now = Date.now();
+      const remainingToFull = Math.max(0, (max ?? 0) - (count ?? 0));
+      const msToFull = remainingToFull * (cooldownMs ?? 0);
+      const fullAt = msToFull > 0 ? new Date(now + msToFull) : null;
+
+      let nextAt = null;
+      if (count < max) {
+        const nextNeed = Math.ceil(count) - count;
+        const msToNext = (nextNeed <= 0 ? 0 : nextNeed * (cooldownMs ?? 0));
+        nextAt = new Date(now + msToNext);
+      }
+      return { fullAt, nextAt };
+    }
+
     function renderCharges(count, max) {
       $("charges").textContent = `${count}/${max}`;
       const ratio = !max ? 0 : Math.max(0, Math.min(1, count / max));
@@ -151,11 +265,19 @@
       $("paint").className = count >= 1 ? "ok" : "warn";
     }
 
-    // ===== ステータス取得 & 表示（色は表示しない）=====
+    function renderEta(count, max, cooldownMs) {
+      const { fullAt, nextAt } = calcEta(count, max, cooldownMs);
+      $("etaNext").textContent = (count >= max) ? "満タンです" :
+        (nextAt ? `${nextAt.toLocaleString("ja-JP", { timeZone:"Asia/Tokyo" })}` : "-");
+      $("etaFull").textContent = (count >= max) ? "満タンです" :
+        (fullAt ? `${fullAt.toLocaleString("ja-JP", { timeZone:"Asia/Tokyo" })}` : "-");
+    }
+
+    // ===== ステータス取得 & 表示 =====
     async function fetchAndRender() {
       const url  = `${WORKERS_BASE}/api/test-fetch`;
       const body = { clientId: CLIENT_ID, acctId: ACCT_ID };
-      setMsg("取得中…");
+      setMsg(`取得中…（acct: ${ACCT_ID}）`);
       try {
         const res = await fetch(url, {
           method: "POST",
@@ -169,40 +291,64 @@
         $("droplets").textContent = st.droplets ?? "-";
 
         const c = st.charges || {};
-        renderCharges(Number(c.count ?? 0), Number(c.max ?? 0));
+        const count = Number(c.count ?? 0);
+        const max   = Number(c.max ?? 0);
+        const cdMs  = Number(c.cooldownMs ?? 0);
+        renderCharges(count, max);
+        renderEta(count, max, cdMs);
 
+        $("lastUpdated").textContent = fmtDate(Date.now());
         setMsg("取得完了");
       } catch (e) {
         setMsg("取得エラー: " + e.message, true);
       }
     }
 
-    // Cookie 保存（任意）
-    async function saveCredFromPrompt() {
-      const token = prompt("Cookie 全体（例: j=...; cf_clearance=...）を貼り付け:");
-      if (!token) return;
+    // ===== サーバの Cron を手動実行（任意）=====
+    async function runCron() {
       try {
-        const res = await fetch(`${WORKERS_BASE}/api/accounts/cred`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId: CLIENT_ID, acctId: ACCT_ID, token })
-        });
-        const j = await res.json().catch(()=> ({}));
-        if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
-        setMsg("認証情報を保存しました。");
+        const res = await fetch(`${WORKERS_BASE}/admin/run-cron`, { method: "POST" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setMsg("サーバの定期チェックを実行しました。");
       } catch (e) {
-        setMsg("保存エラー: " + e.message, true);
+        setMsg("実行エラー: " + e.message + "（管理者トークン未設定だと 401 になります）", true);
       }
     }
 
-    // クリックイベント
-    document.getElementById("btnSub").addEventListener("click", subscribePush);
-    document.getElementById("btnUnsub").addEventListener("click", unsubscribePush);
-    document.getElementById("btnFetch").addEventListener("click", fetchAndRender);
-    document.getElementById("btnSaveCred").addEventListener("click", saveCredFromPrompt);
+    // ===== イベント束ね =====
+    $("btnSub").addEventListener("click", subscribePush);
+    $("btnUnsub").addEventListener("click", unsubscribePush);
+    $("btnFetch").addEventListener("click", fetchAndRender);
+    $("btnRunCron").addEventListener("click", runCron);
 
-    // 初回自動取得
-    fetchAndRender();
+    $("btnAcctRefresh").addEventListener("click", refreshAccountList);
+    $("acctSelect").addEventListener("change", (e) => {
+      ACCT_ID = e.target.value;
+      localStorage.setItem("activeAcct", ACCT_ID);
+      fetchAndRender();
+    });
+    $("btnAcctAdd").addEventListener("click", async () => {
+      const acctId = $("newAcctId").value.trim();
+      const label  = $("newAcctLabel").value.trim();
+      if (!acctId) { alert("acctId を入力してください"); return; }
+      try {
+        await addAccount(acctId, label || acctId);
+        $("newAcctId").value = ""; $("newAcctLabel").value = "";
+        setMsg("アカウントを追加しました。");
+      } catch (e) { setMsg("追加エラー: " + e.message, true); }
+    });
+    $("btnAcctDel").addEventListener("click", async () => {
+      if (!confirm("選択中のアカウントを削除しますか？（保存済みCookieも別APIで削除推奨）")) return;
+      try {
+        await deleteAccount(ACCT_ID);
+        setMsg("アカウントを削除しました。");
+      } catch (e) { setMsg("削除エラー: " + e.message, true); }
+    });
+    $("btnSaveCred").addEventListener("click", saveCredFromPrompt);
+
+    // 初期化：アカウントリスト & 直近表示
+    await refreshAccountList();
+    await fetchAndRender();
   </script>
 </body>
 </html>
